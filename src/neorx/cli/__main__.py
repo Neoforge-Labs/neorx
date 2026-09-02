@@ -1,4 +1,4 @@
-"""Deprecated entry point. Use the ``neorx`` console script."""
+"""Allow ``python -m neorx.cli``."""
 
 from neorx.cli import main
 

@@ -84,11 +84,12 @@ rl = ["stable-baselines3>=2.0"]
 mirror = ["fair-esm>=2.0"]
 
 [project.scripts]
-dockbot = "modules.dockbot.__main__:main"
-genmol = "modules.genmol.__main__:main"
-causalbiorl = "modules.causalbiorl.__main__:main"
-mirrorfold = "modules.mirrorfold.__main__:main"
-neorx = "modules.neorx.__main__:main"
+neorx = "neorx.cli:main"
+# Deprecated aliases, removed in 0.3.0.
+genmol = "neorx.genmol.__main__:main"
+dockbot = "neorx.dockbot.__main__:main"
+causalbiorl = "neorx.causalbiorl.__main__:main"
+mirrorfold = "neorx.mirrorfold.__main__:main"
 
 [tool.hatch.build]
 artifacts = ["src/neorx/genmol/assets/*.pt"]
