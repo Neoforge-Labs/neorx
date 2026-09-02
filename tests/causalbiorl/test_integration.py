@@ -322,19 +322,19 @@ class TestDrugDiscoveryEnv:
         assert not np.any(np.isnan(obs))
 
     def test_step_returns_valid_tuple(self) -> None:
-        from neorx.causalbiorl.envs.drug_discovery import DrugDiscoveryEnv
+        from neorx.causalbiorl.envs.drug_discovery import DrugDiscoveryEnv, LATENT_DIM
 
         env = DrugDiscoveryEnv(
             disease="TestDisease",
             prebuilt_graph=self._make_graph(),
             prebuilt_targets=self._make_targets(),
             max_steps=5,
-            latent_dim=16,
+            latent_dim=LATENT_DIM,
         )
         env.reset(seed=42)
 
-        # Action: [target_selector(2), stop_signal(1), delta_z(16)]
-        action = np.zeros(2 + 16, dtype=np.float32)
+        # Action: [target_selector(2), stop_signal(1), delta_z(LATENT_DIM)]
+        action = np.zeros(2 + LATENT_DIM, dtype=np.float32)
         action[0] = 0.5  # Target selector
         obs, reward, terminated, truncated, info = env.step(action)
 
@@ -345,21 +345,21 @@ class TestDrugDiscoveryEnv:
         assert isinstance(info, dict)
 
     def test_episode_terminates(self) -> None:
-        from neorx.causalbiorl.envs.drug_discovery import DrugDiscoveryEnv
+        from neorx.causalbiorl.envs.drug_discovery import DrugDiscoveryEnv, LATENT_DIM
 
         env = DrugDiscoveryEnv(
             disease="TestDisease",
             prebuilt_graph=self._make_graph(),
             prebuilt_targets=self._make_targets(),
             max_steps=3,
-            latent_dim=8,
+            latent_dim=LATENT_DIM,
         )
         env.reset(seed=42)
 
         done = False
         steps = 0
         while not done and steps < 20:
-            action = np.zeros(2 + 8, dtype=np.float32)
+            action = np.zeros(2 + LATENT_DIM, dtype=np.float32)
             _, _, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             steps += 1
@@ -367,23 +367,40 @@ class TestDrugDiscoveryEnv:
         assert done, "Episode should terminate within max_steps"
 
     def test_stop_action_terminates(self) -> None:
-        from neorx.causalbiorl.envs.drug_discovery import DrugDiscoveryEnv
+        from neorx.causalbiorl.envs.drug_discovery import DrugDiscoveryEnv, LATENT_DIM
 
         env = DrugDiscoveryEnv(
             disease="TestDisease",
             prebuilt_graph=self._make_graph(),
             prebuilt_targets=self._make_targets(),
             max_steps=50,
-            latent_dim=8,
+            latent_dim=LATENT_DIM,
         )
         env.reset(seed=42)
 
         # Set stop signal > 0.5
-        action = np.zeros(2 + 8, dtype=np.float32)
+        action = np.zeros(2 + LATENT_DIM, dtype=np.float32)
         action[1] = 1.0  # stop signal (index 1 = stop if > 0.5 ... check env impl)
         _, _, terminated, truncated, _ = env.step(action)
         # Even if stop doesn't terminate on first step, env should still work
         assert isinstance(terminated, bool)
+
+    def test_mismatched_latent_dim_raises(self) -> None:
+        from neorx.causalbiorl.envs.drug_discovery import DrugDiscoveryEnv
+
+        env = DrugDiscoveryEnv(
+            disease="TestDisease",
+            prebuilt_graph=self._make_graph(),
+            prebuilt_targets=self._make_targets(),
+            max_steps=5,
+            latent_dim=8,
+        )
+        env.reset(seed=42)
+
+        action = np.zeros(2 + 8, dtype=np.float32)
+        action[0] = 0.5
+        with pytest.raises(ValueError, match="latent_dim"):
+            env.step(action)
 
 
 # ────────────────────────────────────────────────────────────────────────── #

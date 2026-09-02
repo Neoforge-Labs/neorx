@@ -526,18 +526,6 @@ class DrugDiscoveryEnv(gym.Env):
 
         z_tensor = torch.as_tensor(z, dtype=torch.float32).unsqueeze(0)
 
-        # The env's own latent_dim is caller-configurable (some tests use
-        # small values for speed), but the shipped VAE's latent space is
-        # fixed by its trained weights. Reconcile by padding or truncating
-        # -- the alternative is a hard shape-mismatch crash on any env not
-        # built with the model's exact latent_dim.
-        model_dim = self._genmol_model.latent_dim
-        z_dim = z_tensor.shape[-1]
-        if z_dim < model_dim:
-            z_tensor = torch.nn.functional.pad(z_tensor, (0, model_dim - z_dim))
-        elif z_dim > model_dim:
-            z_tensor = z_tensor[..., :model_dim]
-
         with torch.no_grad():
             token_ids = self._genmol_model.decode(z_tensor, greedy=True)
         return self._genmol_tokenizer.decode(token_ids[0].tolist())
