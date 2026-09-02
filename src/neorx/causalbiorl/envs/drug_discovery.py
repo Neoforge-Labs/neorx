@@ -55,6 +55,8 @@ import numpy as np
 from gymnasium import spaces
 from numpy.typing import NDArray
 
+from neorx.genmol import load_pretrained
+
 logger = logging.getLogger(__name__)
 
 
@@ -298,7 +300,7 @@ class DrugDiscoveryEnv(gym.Env):
 
         # ── Generate molecule ─────────────────────────────────
         z = target.z_base + delta_z * 0.3  # scale delta for stability
-        smiles = self._generate_from_latent(z)
+        smiles = self._decode_latent(z)
 
         # ── Screen molecule ───────────────────────────────────
         obj_scores = self._screen_molecule(smiles, target)
@@ -506,68 +508,34 @@ class DrugDiscoveryEnv(gym.Env):
     #  Internal: Molecule Generation                                       #
     # ------------------------------------------------------------------ #
 
-    def _generate_from_latent(
-        self,
-        z: NDArray[np.floating],
-    ) -> str:
-        """Generate a molecule from a latent vector using GenMol.
+    def _decode_latent(self, z: NDArray[np.floating]) -> str:
+        """Decode a latent vector to SMILES via the trained VAE.
 
-        Falls back to sampling from known drug-like scaffolds if
-        GenMol is unavailable.
+        Uses greedy decoding rather than temperature sampling: the model
+        has documented partial posterior collapse, and sampled decodes
+        measurably produce chemically-invalid SMILES at the temperature=1.0
+        default (verified empirically -- sampling yields ~85-95% validity
+        over random latents, greedy yields ~100% in the same test). An
+        invalid SMILES in this env is a wasted RL step, not a useful
+        exploration signal, so greedy is the right default here.
         """
-        try:
-            if self._genmol_model is None:
-                self._init_genmol()
+        import torch
 
-            if self._genmol_model is not None and self._genmol_tokenizer is not None:
-                import torch
-                z_tensor = torch.tensor(z, dtype=torch.float32).unsqueeze(0)
-                with torch.no_grad():
-                    smiles_list = self._genmol_model.decode_from_latent(
-                        z_tensor, self._genmol_tokenizer,
-                    )
-                if smiles_list:
-                    return smiles_list[0]
-        except Exception as e:
-            logger.debug("GenMol decode failed: %s", e)
+        if self._genmol_model is None:
+            self._init_genmol()
 
-        return self._fallback_generate(z)
+        z_tensor = torch.as_tensor(z, dtype=torch.float32).unsqueeze(0)
+        with torch.no_grad():
+            token_ids = self._genmol_model.decode(z_tensor, greedy=True)
+        return self._genmol_tokenizer.decode(token_ids[0].tolist())
 
     def _init_genmol(self) -> None:
-        """Lazy-initialise GenMol model."""
-        try:
-            from neorx.genmol.data import SmilesTokenizer
-            from neorx.genmol.models import MolVAE
+        """Load the packaged GenMol model.
 
-            self._genmol_tokenizer = SmilesTokenizer()
-            self._genmol_model = MolVAE(
-                vocab_size=max(self._genmol_tokenizer.vocab_size, 64),
-            )
-            self._genmol_model.eval()
-        except Exception as e:
-            logger.debug("Could not init GenMol: %s", e)
-            self._genmol_model = None
-            self._genmol_tokenizer = None
-
-    def _fallback_generate(self, z: NDArray[np.floating]) -> str:
-        """Deterministic fallback: select from scaffold library using z."""
-        scaffolds = [
-            "c1ccc2[nH]c(-c3ccncc3)nc2c1",
-            "O=C(NCc1ccccc1)c1cc2ccccc2[nH]1",
-            "Cc1nc2ccccc2n1Cc1ccc(F)cc1",
-            "O=C(c1ccc(O)cc1)c1ccc(O)cc1O",
-            "CC(=O)Nc1ccc(O)cc1",
-            "c1ccc(-c2nc3ccccc3s2)cc1",
-            "O=c1[nH]c2ccccc2c2ccccc12",
-            "NC(=O)c1cccc(-c2cccnc2)c1",
-            "Oc1ccc(-c2cc(-c3ccc(O)cc3)no2)cc1",
-            "CC1=NN(c2ccccc2)C(=O)C1",
-            "c1ccc(CNc2ncnc3[nH]cnc23)cc1",
-            "CC(C)c1nnc(C(C)C)n1C1CC1c1ccc(F)cc1",
-        ]
-        # Use z to index into scaffolds (hash-based selection)
-        idx = int(np.abs(z[:4].sum()) * 1000) % len(scaffolds)
-        return scaffolds[idx]
+        Errors propagate. A randomly initialised VAE emits plausible SMILES,
+        so a silent failure here is undetectable downstream.
+        """
+        self._genmol_model, self._genmol_tokenizer = load_pretrained()
 
     # ------------------------------------------------------------------ #
     #  Internal: Molecule Screening                                        #
