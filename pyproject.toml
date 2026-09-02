@@ -52,6 +52,11 @@ dependencies = [
     # the newer macOS SDK/clang); 2.1.0 is the first with one and passes.
     # Caught by scripts/check_floors.sh. Verified 2026-09-03.
     "numpy>=2.1.0",
+    # Installed and imported cleanly on Python 3.13 / macOS arm64 via
+    # `uv pip install --python .venv/bin/python polars`; benchmark.py's
+    # pl.DataFrame/write_csv usage and tests/causalbiorl pass against it.
+    # Verified 2026-09-03.
+    "polars>=1.44.1",
     "pydantic>=2.12.5",
     "py3Dmol>=2.4",
     # Floor bisected against tests/test_public_api.py on Python 3.13 /
