@@ -1,5 +1,5 @@
 """
-Tests for neorx.identifier
+Tests for neorx.core.causal.identifier
 ====================================
 
 The identifier is the NOVEL core of NeoRx.  These tests

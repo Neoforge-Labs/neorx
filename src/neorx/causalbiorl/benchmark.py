@@ -180,7 +180,7 @@ def _save_results(results: list[BenchmarkResult], out: Path) -> None:
         })
     df = pl.DataFrame(rows)
     df.write_csv(out / "benchmark_summary.csv")
-    print(f"\n{str(df)}")
+    print(f"\n{df}")
 
 
 def _generate_plots(results: list[BenchmarkResult], out: Path) -> None:
@@ -272,5 +272,5 @@ def run_generalisation_test(
     df = pl.DataFrame(rows)
     df.write_csv(out / f"{env_id}_generalisation.csv")
     if verbose:
-        print(f"\n{str(df)}")
+        print(f"\n{df}")
     return df

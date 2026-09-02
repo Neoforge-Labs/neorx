@@ -58,3 +58,9 @@ modules/dockbot/cache/
 
 # ChEMBL SQLite database (28 GB — too large for git)
 chembl_*.db
+
+# Local backups and trained-model checkpoints -- large and machine-specific,
+# never meant to be committed (a `git add -A` would otherwise pull in tens
+# of MB of these).
+.backup-scripts/
+checkpoints/

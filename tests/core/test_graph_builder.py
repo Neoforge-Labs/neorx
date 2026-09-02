@@ -1,5 +1,5 @@
 """
-Tests for neorx.graph_builder
+Tests for neorx.core.graph.graph_builder
 ======================================
 """
 
