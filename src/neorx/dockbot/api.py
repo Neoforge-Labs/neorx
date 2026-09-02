@@ -72,7 +72,7 @@ async def prepare_protein_endpoint(pdb_id: str):
     from .protein_prep import prepare_protein
 
     try:
-        result = prepare_protein(pdb_id, output_dir=OUTPUT_DIR)
+        result = prepare_protein(pdb_id, cache_dir=OUTPUT_DIR)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -133,9 +133,9 @@ async def dock_endpoint(request: DockRequest):
         # Prepare receptor if needed
         receptor_pdbqt = Path(request.receptor_pdbqt)
         if not receptor_pdbqt.exists():
-            prep = prepare_protein(request.receptor_pdbqt, output_dir=OUTPUT_DIR)
-            receptor_pdbqt = Path(prep["pdbqt"])
-            clean_pdb = Path(prep["clean_pdb"])
+            prep = prepare_protein(request.receptor_pdbqt, cache_dir=OUTPUT_DIR)
+            receptor_pdbqt = Path(prep.pdbqt_path)
+            clean_pdb = receptor_pdbqt.with_suffix(".pdb")
         else:
             clean_pdb = receptor_pdbqt.with_suffix(".pdb")
 
@@ -196,9 +196,9 @@ async def screen_endpoint(request: ScreenRequest):
         # Prepare receptor
         receptor_pdbqt = Path(request.receptor_pdbqt)
         if not receptor_pdbqt.exists():
-            prep = prepare_protein(request.receptor_pdbqt, output_dir=OUTPUT_DIR)
-            receptor_pdbqt = Path(prep["pdbqt"])
-            clean_pdb = Path(prep["clean_pdb"])
+            prep = prepare_protein(request.receptor_pdbqt, cache_dir=OUTPUT_DIR)
+            receptor_pdbqt = Path(prep.pdbqt_path)
+            clean_pdb = receptor_pdbqt.with_suffix(".pdb")
         else:
             clean_pdb = receptor_pdbqt.with_suffix(".pdb")
 
