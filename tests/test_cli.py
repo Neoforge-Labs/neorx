@@ -7,7 +7,7 @@ from neorx.cli import app
 
 runner = CliRunner()
 
-SUBCOMMANDS = ["genmol", "dockbot", "causalbiorl", "mirrorfold"]
+SUBCOMMANDS = ["genmol", "dockbot", "causalbiorl", "mirrorfold", "molscreen"]
 
 
 def test_root_help_lists_every_module():
