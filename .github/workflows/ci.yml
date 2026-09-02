@@ -34,7 +34,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.13"]
+        # Both floors of requires-python must stay green -- this is the
+        # matrix that guards the dependency-floor corrections directly:
+        # a floor that only works on 3.13 would go undetected without it.
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -46,17 +49,17 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
       - name: Run tests
-        run: uv run python -m pytest modules/ -q --tb=short --timeout=120
+        run: uv run python -m pytest -q --tb=short --timeout=120
       - name: Run tests with coverage
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: |
-          uv run python -m pytest modules/ \
-            --cov=modules \
+          uv run python -m pytest \
+            --cov=src/neorx \
             --cov-report=xml \
             --cov-report=term-missing \
             -q --tb=short --timeout=120
       - name: Upload coverage
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         uses: codecov/codecov-action@v4
         with:
           file: coverage.xml
@@ -77,4 +80,29 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
       - name: Mypy
-        run: uv run mypy modules/ --ignore-missing-imports --no-error-summary || true
+        run: uv run mypy src/neorx --ignore-missing-imports --no-error-summary || true
+
+  quality:
+    name: Lint, types, coverage, floors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # check_floors.sh shells out to `uv pip install`.
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # dev tooling lives in [dependency-groups].dev (PEP 735), not a
+      # `[project.optional-dependencies]` extra -- ".[dev]" is not a valid
+      # extra on this project and would fail.
+      - run: pip install -e . ruff mypy pytest pytest-cov pytest-timeout
+      - run: ruff check src/ tests/
+      - run: mypy src/neorx
+      - name: Coverage ratchet
+        run: |
+          # Baseline is the coverage of the first green build; it may rise,
+          # never fall. Raising the target is sub-project 4's job.
+          pytest --cov=src/neorx --cov-report=term --cov-fail-under=$(cat .coverage-floor)
+      - run: ./scripts/check_floors.sh

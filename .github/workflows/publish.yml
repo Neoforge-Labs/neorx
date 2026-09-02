@@ -49,30 +49,115 @@ jobs:
           path: dist/
 
   test-install:
-    name: Test install from wheel
+    name: Smoke-test the built wheel
     needs: build
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
 
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist/
 
-      - name: Install from wheel
+      - name: Install the wheel
         run: pip install dist/*.whl
 
-      - name: Verify import
+      # Everything below runs from $HOME. Running inside the checkout would
+      # import the source tree instead of the installed package -- which is
+      # how CI previously passed on a broken wheel.
+      - name: Import every public name
+        working-directory: ${{ runner.temp }}
         run: |
-          python -c "import neorx; print(f'neorx {neorx.__version__} installed successfully')"
-          python -c "from neorx import build_disease_graph, identify_causal_targets, run_pipeline; print('Core imports OK')"
+          python - <<'PY'
+          import importlib
+          pkgs = ["neorx", "neorx.core", "neorx.genmol", "neorx.causalbiorl",
+                  "neorx.molscreen", "neorx.dockbot", "neorx.mirrorfold"]
+          for name in pkgs:
+              mod = importlib.import_module(name)
+              assert getattr(mod, "__all__", None), f"{name} declares no __all__"
+              missing = [n for n in mod.__all__ if not hasattr(mod, n)]
+              assert not missing, f"{name} exports undefined names: {missing}"
+              print(f"{name}: {len(mod.__all__)} names OK")
+          PY
+
+      - name: Generate real molecules from the shipped weights
+        working-directory: ${{ runner.temp }}
+        run: |
+          python - <<'PY'
+          from rdkit import Chem
+          from neorx.genmol import generate, load_pretrained
+          model, tok = load_pretrained()
+          smiles = generate(model, tok, n=20)
+          assert smiles, "generate returned nothing"
+          assert all(Chem.MolFromSmiles(s) for s in smiles), "invalid SMILES"
+          assert len(set(smiles)) > 1, "expected more than one distinct molecule"
+          print(f"generated {len(smiles)} molecules, {len(set(smiles))} distinct")
+          PY
+
+      - name: Environment generates via the VAE, not the deleted scaffolds
+        working-directory: ${{ runner.temp }}
+        run: |
+          python - <<'PY'
+          import networkx as nx, numpy as np
+          from neorx.causalbiorl.envs.drug_discovery import DrugDiscoveryEnv
+
+          # Provenance check only. The model has documented partial posterior
+          # collapse, so asserting diversity here would fail for unrelated
+          # reasons.
+          SCAFFOLDS = {
+              "c1ccc2[nH]c(-c3ccncc3)nc2c1",
+              "O=C(NCc1ccccc1)c1cc2ccccc2[nH]1",
+              "Cc1nc2ccccc2n1Cc1ccc(F)cc1",
+              "O=C(c1ccc(O)cc1)c1ccc(O)cc1O",
+              "CC(=O)Nc1ccc(O)cc1",
+              "c1ccc(-c2nc3ccccc3s2)cc1",
+              "O=c1[nH]c2ccccc2c2ccccc12",
+              "NC(=O)c1cccc(-c2cccnc2)c1",
+              "Oc1ccc(-c2cc(-c3ccc(O)cc3)no2)cc1",
+              "CC1=NN(c2ccccc2)C(=O)C1",
+              "c1ccc(CNc2ncnc3[nH]cnc23)cc1",
+              "CC(C)c1nnc(C(C)C)n1C1CC1c1ccc(F)cc1",
+          }
+          g = nx.DiGraph()
+          for gene, s in [("gene_A", 0.9), ("gene_B", 0.8)]:
+              g.add_node(gene, type="gene", score=s, tissue_relevant=True)
+          g.add_node("disease_X", type="disease", score=1.0, tissue_relevant=True)
+          for gene in ("gene_A", "gene_B"):
+              g.add_edge(gene, "disease_X", edge_type="associated_with", weight=0.8)
+          targets = [{"gene": "A", "causal_confidence": 0.85, "classification": "CAUSAL"}]
+
+          env = DrugDiscoveryEnv(disease="T", prebuilt_graph=g,
+                                 prebuilt_targets=targets, max_steps=20)
+          env.reset(seed=0)
+          rng = np.random.default_rng(0)
+          mols = []
+          for _ in range(20):
+              a = rng.uniform(-1, 1, size=env.action_space.shape).astype(np.float32)
+              *_, info = env.step(a)
+              s = info.get("smiles") or info.get("molecule")
+              if s:
+                  mols.append(s)
+          assert mols, "episode produced no molecules"
+          leaked = set(mols) & SCAFFOLDS
+          assert not leaked, f"deleted fallback scaffolds emitted: {leaked}"
+          print(f"{len(mols)} molecules, none from the scaffold list")
+          PY
+
+      - name: Wheel contents
+        run: |
+          python -m zipfile -l dist/*.whl > /tmp/contents.txt
+          grep -q "neorx/genmol/assets/molvae_chembl36.pt" /tmp/contents.txt \
+            || { echo "FAIL: weights absent from wheel"; exit 1; }
+          ! grep -q "^modules/" /tmp/contents.txt \
+            || { echo "FAIL: modules/ shim leaked into wheel"; exit 1; }
+          echo "wheel contents OK"
 
   publish-testpypi:
     name: Publish to TestPyPI
