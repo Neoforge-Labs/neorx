@@ -18,7 +18,7 @@ from typing import Any, Literal
 
 import gymnasium as gym
 import numpy as np
-import pandas as pd
+import polars as pl
 from tqdm import tqdm
 
 import neorx.causalbiorl  # ensure envs registered  # noqa: F401
@@ -178,9 +178,9 @@ def _save_results(results: list[BenchmarkResult], out: Path) -> None:
             "mean_steps": r.mean_total_steps,
             "std_steps": r.std_total_steps,
         })
-    df = pd.DataFrame(rows)
-    df.to_csv(out / "benchmark_summary.csv", index=False)
-    print(f"\n{df.to_string(index=False)}")
+    df = pl.DataFrame(rows)
+    df.write_csv(out / "benchmark_summary.csv")
+    print(f"\n{str(df)}")
 
 
 def _generate_plots(results: list[BenchmarkResult], out: Path) -> None:
@@ -223,7 +223,7 @@ def run_generalisation_test(
     n_seeds: int = 5,
     output_dir: str | Path = "results",
     verbose: bool = True,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """Train on easy difficulty, test on hard — measures generalisation.
 
     Returns a DataFrame with train and test rewards per agent per seed.
@@ -269,8 +269,8 @@ def run_generalisation_test(
                 "test_reward_std": float(np.std(test_rewards)),
             })
 
-    df = pd.DataFrame(rows)
-    df.to_csv(out / f"{env_id}_generalisation.csv", index=False)
+    df = pl.DataFrame(rows)
+    df.write_csv(out / f"{env_id}_generalisation.csv")
     if verbose:
-        print(f"\n{df.to_string(index=False)}")
+        print(f"\n{str(df)}")
     return df
