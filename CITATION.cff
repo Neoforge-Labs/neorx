@@ -2,9 +2,13 @@ cff-version: 1.2.0
 title: "NeoRx: Causal Inference for Automated Drug Target Identification"
 message: "If you use this software, please cite it as below."
 type: software
-version: 0.1.0
-date-released: "2026-03-31"
+version: 0.2.0
+date-released: "2026-09-02"
 license: LicenseRef-NeoRx-NonCommercial
+notes: >-
+  Results reported in the accompanying manuscripts correspond to the
+  v0.1.0-paper tag. Later releases change the causal engine and will not
+  reproduce those figures.
 repository-code: "https://github.com/cod3smith/neorx"
 url: "https://github.com/cod3smith/neorx"
 abstract: >-

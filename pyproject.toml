@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "neorx"
-version = "0.1.0"
+version = "0.2.0"
 description = "Causal drug target discovery via Pearl's do-calculus — distinguishes genuine causal targets from correlational bystanders"
 readme = "README.md"
 license = "LicenseRef-NeoRx-NonCommercial"
