@@ -153,6 +153,10 @@ dev = [
     "pytest-timeout>=2.3",
     "ruff>=0.9",
     "mypy>=1.14",
+    # Used by tests/test_wheel_contents.py (`python -m build`) to build the
+    # wheel under test -- must be declared or `uv sync --group dev` in CI
+    # leaves it missing and those tests error.
+    "build>=1.2",
 ]
 
 [tool.pytest.ini_options]
