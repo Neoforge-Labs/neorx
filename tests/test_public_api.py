@@ -34,3 +34,23 @@ def test_molscreen_exports_the_documented_screening_api():
 
     for fn in ("lipinski_filter", "qed_score", "pains_filter", "sa_score"):
         assert callable(getattr(ms, fn)), f"molscreen.{fn} must be callable"
+
+
+@pytest.mark.parametrize(
+    "mod,names",
+    [
+        ("neorx.causalbiorl", ["DrugDiscoveryEnv", "CausalAgent"]),
+        ("neorx.dockbot", ["prepare_protein", "prepare_ligand", "dock"]),
+        ("neorx.mirrorfold", ["predict_pair", "compare_structures"]),
+        ("neorx.molscreen", ["lipinski_filter", "qed_score", "pains_filter", "sa_score"]),
+        ("neorx.genmol", ["MolVAE", "generate", "load_pretrained"]),
+    ],
+)
+def test_spec_documented_entry_points_import(mod, names):
+    """A name resolving because it happens to be in __all__ is not the same
+    as the spec's documented quick-start actually working. This checks the
+    literal usage examples from the design spec, not just internal
+    consistency of each module's own __all__ list."""
+    m = importlib.import_module(mod)
+    missing = [n for n in names if not hasattr(m, n)]
+    assert not missing, f"{mod} does not export documented API: {missing}"

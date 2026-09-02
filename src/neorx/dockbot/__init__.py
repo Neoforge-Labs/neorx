@@ -45,6 +45,9 @@ from . import (  # noqa: F401,E402
     scorer,
     viz,
 )
+from .docker import dock  # noqa: F401,E402
+from .ligand_prep import prepare_ligand  # noqa: F401,E402
+from .protein_prep import prepare_protein  # noqa: F401,E402
 
 __all__ = [
     # Models
@@ -59,6 +62,10 @@ __all__ = [
     "ScreeningJob",
     "ScreeningResult",
     "ScreenRequest",
+    # Quick-start entry points (see module docstring)
+    "prepare_protein",
+    "prepare_ligand",
+    "dock",
     # Submodules (lazy access via neorx.dockbot.<submodule>)
     "protein_prep",
     "ligand_prep",
