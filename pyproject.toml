@@ -90,6 +90,9 @@ causalbiorl = "modules.causalbiorl.__main__:main"
 mirrorfold = "modules.mirrorfold.__main__:main"
 neorx = "modules.neorx.__main__:main"
 
+[tool.hatch.build]
+artifacts = ["src/neorx/genmol/assets/*.pt"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/neorx"]
 

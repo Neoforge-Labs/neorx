@@ -36,6 +36,7 @@ from .models.vae import MolVAE, vae_loss
 from .models.cvae import MolCVAE, PropertyNormalizer
 from .generate import generate, generate_conditional, interpolate
 from .train import train_vae, TrainConfig, load_checkpoint
+from .pretrained import GenMolAssetError, load_pretrained  # noqa: F401
 
 __all__ = [
     # Data
@@ -53,4 +54,7 @@ __all__ = [
     "generate",
     "generate_conditional",
     "interpolate",
+    # Pretrained assets
+    "load_pretrained",
+    "GenMolAssetError",
 ]
