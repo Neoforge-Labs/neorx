@@ -12,6 +12,8 @@ Reference:
 
 from neorx.causalbiorl.envs.registration import register_envs
 
+from . import agents, causal, envs  # noqa: F401,E402
+
 __version__ = "0.1.0"
 __all__ = ["envs", "agents", "causal"]
 

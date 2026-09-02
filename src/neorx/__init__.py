@@ -58,7 +58,10 @@ from neorx.core import (  # noqa: F401
     ADMETProfile,
 )
 
-__version__ = "0.1.0"
+# --- Subpackages -----------------------------------------------------
+from neorx import causalbiorl, core, dockbot, genmol, mirrorfold, molscreen  # noqa: F401,E402
+
+__version__ = "0.2.0"
 
 __all__ = [
     # Enums
@@ -103,4 +106,13 @@ __all__ = [
     # ADMET
     "predict_admet",
     "ADMETProfile",
+]
+
+__all__ = __all__ + [
+    "core",
+    "genmol",
+    "causalbiorl",
+    "molscreen",
+    "dockbot",
+    "mirrorfold",
 ]
