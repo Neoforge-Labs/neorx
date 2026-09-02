@@ -542,18 +542,23 @@ class DrugDiscoveryEnv(gym.Env):
         loudly here rather than surface later as a shape-mismatch error
         deep inside ``decode()``.
         """
-        self._genmol_model, self._genmol_tokenizer = load_pretrained()
+        model, tokenizer = load_pretrained()
 
-        if self.latent_dim != self._genmol_model.latent_dim:
+        if self.latent_dim != model.latent_dim:
             raise ValueError(
                 f"latent_dim={self.latent_dim} does not match the shipped "
                 f"GenMol model's latent dimension "
-                f"({self._genmol_model.latent_dim}). The environment's "
+                f"({model.latent_dim}). The environment's "
                 f"latent action space must match the decoder it drives -- "
                 f"construct the environment with "
-                f"latent_dim={self._genmol_model.latent_dim}, or omit the "
+                f"latent_dim={model.latent_dim}, or omit the "
                 f"argument to use the default."
             )
+
+        # Only commit to instance state once validation has passed, so a
+        # failed check leaves self._genmol_model as None and a retry (e.g.
+        # the next env.step()) re-validates instead of skipping the guard.
+        self._genmol_model, self._genmol_tokenizer = model, tokenizer
 
     # ------------------------------------------------------------------ #
     #  Internal: Molecule Screening                                        #

@@ -402,6 +402,14 @@ class TestDrugDiscoveryEnv:
         with pytest.raises(ValueError, match="latent_dim"):
             env.step(action)
 
+        # The guard must not be bypassable on a second call: a failed
+        # validation must not leave partial state (e.g. self._genmol_model
+        # set) that lets a later step skip straight past the check and
+        # fail deeper inside decode() with a confusing shape-mismatch error
+        # instead of the same clear ValueError.
+        with pytest.raises(ValueError, match="latent_dim"):
+            env.step(action)
+
 
 # ────────────────────────────────────────────────────────────────────────── #
 #  SCM Typed Edges (integration tests)                                       #
