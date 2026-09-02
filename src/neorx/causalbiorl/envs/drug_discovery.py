@@ -525,6 +525,19 @@ class DrugDiscoveryEnv(gym.Env):
             self._init_genmol()
 
         z_tensor = torch.as_tensor(z, dtype=torch.float32).unsqueeze(0)
+
+        # The env's own latent_dim is caller-configurable (some tests use
+        # small values for speed), but the shipped VAE's latent space is
+        # fixed by its trained weights. Reconcile by padding or truncating
+        # -- the alternative is a hard shape-mismatch crash on any env not
+        # built with the model's exact latent_dim.
+        model_dim = self._genmol_model.latent_dim
+        z_dim = z_tensor.shape[-1]
+        if z_dim < model_dim:
+            z_tensor = torch.nn.functional.pad(z_tensor, (0, model_dim - z_dim))
+        elif z_dim > model_dim:
+            z_tensor = z_tensor[..., :model_dim]
+
         with torch.no_grad():
             token_ids = self._genmol_model.decode(z_tensor, greedy=True)
         return self._genmol_tokenizer.decode(token_ids[0].tolist())
@@ -534,8 +547,25 @@ class DrugDiscoveryEnv(gym.Env):
 
         Errors propagate. A randomly initialised VAE emits plausible SMILES,
         so a silent failure here is undetectable downstream.
+
+        The environment's latent action space *is* the model's latent
+        space -- there is no padding/truncation shim reconciling the two.
+        If they disagree, that is a real misconfiguration and must fail
+        loudly here rather than surface later as a shape-mismatch error
+        deep inside ``decode()``.
         """
         self._genmol_model, self._genmol_tokenizer = load_pretrained()
+
+        if self.latent_dim != self._genmol_model.latent_dim:
+            raise ValueError(
+                f"latent_dim={self.latent_dim} does not match the shipped "
+                f"GenMol model's latent dimension "
+                f"({self._genmol_model.latent_dim}). The environment's "
+                f"latent action space must match the decoder it drives -- "
+                f"construct the environment with "
+                f"latent_dim={self._genmol_model.latent_dim}, or omit the "
+                f"argument to use the default."
+            )
 
     # ------------------------------------------------------------------ #
     #  Internal: Molecule Screening                                        #
