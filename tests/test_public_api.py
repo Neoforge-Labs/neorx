@@ -48,9 +48,12 @@ def test_molscreen_exports_the_documented_screening_api():
 )
 def test_spec_documented_entry_points_import(mod, names):
     """A name resolving because it happens to be in __all__ is not the same
-    as the spec's documented quick-start actually working. This checks the
-    literal usage examples from the design spec, not just internal
-    consistency of each module's own __all__ list."""
+    as it being reachable from the exact module the spec documents. This
+    checks that each of these names is importable from the subpackage the
+    spec's quick-start example names them from -- it does not check that
+    the names themselves match the spec's example text verbatim (see
+    docs/superpowers/specs/2026-09-02-package-skeleton-design.md for the
+    corrected example)."""
     m = importlib.import_module(mod)
     missing = [n for n in names if not hasattr(m, n)]
     assert not missing, f"{mod} does not export documented API: {missing}"

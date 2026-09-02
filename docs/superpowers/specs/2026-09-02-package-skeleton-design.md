@@ -126,7 +126,7 @@ Every subpackage gets an `__init__.py` with an explicit `__all__`.
 from neorx import run_pipeline, build_disease_graph, identify_causal_targets
 from neorx.genmol      import MolVAE, generate, load_pretrained
 from neorx.causalbiorl import DrugDiscoveryEnv, CausalAgent
-from neorx.molscreen   import lipinski, qed, pains, synthetic_accessibility
+from neorx.molscreen   import lipinski_filter, qed_score, pains_filter, sa_score
 from neorx.dockbot     import prepare_protein, prepare_ligand, dock
 from neorx.mirrorfold  import predict_pair, compare_structures
 ```
