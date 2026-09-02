@@ -32,11 +32,11 @@ Quick start
 """
 
 from .data.tokenizer import SmilesTokenizer
-from .models.vae import MolVAE, vae_loss
-from .models.cvae import MolCVAE, PropertyNormalizer
 from .generate import generate, generate_conditional, interpolate
-from .train import train_vae, TrainConfig, load_checkpoint
+from .models.cvae import MolCVAE, PropertyNormalizer
+from .models.vae import MolVAE, vae_loss
 from .pretrained import GenMolAssetError, load_pretrained  # noqa: F401
+from .train import TrainConfig, load_checkpoint, train_vae
 
 __all__ = [
     # Data

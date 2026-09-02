@@ -15,13 +15,25 @@ DockBot automates the full molecular docking workflow:
 
 Quick start::
 
-    from neorx.dockbot import prepare_protein, prepare_ligand, dock
+    from neorx.dockbot import prepare_protein, prepare_ligand_pdbqt, dock
 
     protein = prepare_protein("1BNA")
     mol, pdbqt = prepare_ligand_pdbqt("CC(=O)Oc1ccccc1C(O)=O", name="aspirin")
-    result = dock(protein["pdbqt"], pdbqt, site)
+    result = dock(protein.pdbqt_path, pdbqt, site)
 """
 
+from . import (  # noqa: F401,E402
+    binding_site,
+    docker,
+    ligand_prep,
+    parallel,
+    protein_prep,
+    report,
+    scorer,
+    viz,
+)
+from .docker import dock  # noqa: F401,E402
+from .ligand_prep import prepare_ligand, prepare_ligand_pdbqt  # noqa: F401,E402
 from .models import (
     BindingSite,
     BindingSiteMethod,
@@ -35,18 +47,6 @@ from .models import (
     ScreeningResult,
     ScreenRequest,
 )
-from . import (  # noqa: F401,E402
-    binding_site,
-    docker,
-    ligand_prep,
-    parallel,
-    protein_prep,
-    report,
-    scorer,
-    viz,
-)
-from .docker import dock  # noqa: F401,E402
-from .ligand_prep import prepare_ligand  # noqa: F401,E402
 from .protein_prep import prepare_protein  # noqa: F401,E402
 
 __all__ = [
@@ -65,6 +65,7 @@ __all__ = [
     # Quick-start entry points (see module docstring)
     "prepare_protein",
     "prepare_ligand",
+    "prepare_ligand_pdbqt",
     "dock",
     # Submodules (lazy access via neorx.dockbot.<submodule>)
     "protein_prep",

@@ -69,8 +69,8 @@ def test_fallback_generate_no_longer_exists():
 
 
 def test_missing_assets_surface_rather_than_degrade(monkeypatch):
-    from neorx.genmol import GenMolAssetError
     import neorx.causalbiorl.envs.drug_discovery as dd
+    from neorx.genmol import GenMolAssetError
 
     def boom(*a, **k):
         raise GenMolAssetError("no trained checkpoint")
