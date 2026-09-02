@@ -37,9 +37,9 @@ implementation cycle:
 
 | # | Sub-project | Delivers |
 |---|-------------|----------|
-| **1** | **Package skeleton** | **Layout, packaging, public API, CLI, CI. This spec.** |
+| **1** | **Package skeleton** | **Layout, packaging, public API, CLI, CI, and the GenMol→CausalBioRL generation wiring. This spec.** |
 | 2 | Experiment tracking | A harness where a reported number cannot exist without a saved run record |
-| 3 | Correctness | Split `identifier.py` and `drug_discovery.py`; fix backdoor logic; wire GenMol into CausalBioRL |
+| 3 | Correctness | Split `identifier.py` and `drug_discovery.py`; fix backdoor logic; make the CEM inner loop decode |
 | 4 | Test hardening | Behaviour tests; molscreen from zero coverage |
 
 ---
@@ -57,14 +57,19 @@ implementation cycle:
 Explicitly deferred, to keep this sub-project reviewable:
 
 - **Correctness fixes** (sub-project 3). `nx.d_separated`, the backdoor
-  adjustment loop, the CEM/GenMol wiring, and the ablation-harness gating are
-  untouched here.
+  adjustment loop, and the ablation-harness gating are untouched here.
+
+  One correctness fix *is* in scope — the GenMol→CausalBioRL generation wiring,
+  specified below — because it is the difference between the shipped environment
+  producing real molecules and producing twelve hardcoded strings. Its boundary
+  is drawn precisely in that section.
 
   Existing module internals change only where imports require it. New code
-  written in this sub-project is limited to three places, and nowhere else:
-  `__init__.py` export lists, the `neorx.cli` app, and the GenMol asset-loading
-  path (`load_pretrained` and `GenMolAssetError`). Any change outside those three
-  is out of scope and belongs to a later sub-project.
+  written in this sub-project is limited to four places, and nowhere else:
+  `__init__.py` export lists, the `neorx.cli` app, the GenMol asset-loading path
+  (`load_pretrained` and `GenMolAssetError`), and the environment's generation
+  path (`_init_genmol` / `_decode_latent`). Any change outside those four is out
+  of scope and belongs to a later sub-project.
 - **Experiment tracking** (sub-project 2). The `experiments/` directory is
   created as a landing zone but stays empty.
 - **Splitting large files.** `identifier.py` (1,291 lines) and
@@ -134,6 +139,59 @@ Two invariants apply to everything public:
    is empty, rather than returning an untrained model. This is the bug class that
    produced the twelve-scaffold problem, and closing it in the asset-loading path
    is in scope for this sub-project.
+
+### GenMol → CausalBioRL wiring
+
+`DrugDiscovery-v0` is documented as navigating GenMol's latent space, but the
+running environment never reaches the generator. Four defects in one ~35-line
+path, all confirmed by running it:
+
+1. `_init_genmol` constructs `SmilesTokenizer()` without calling `build_vocab()`,
+   leaving `vocab_size == 0`.
+2. It constructs `MolVAE(vocab_size=max(vocab_size, 64))` with no
+   `load_state_dict` — a randomly initialised model. The trained checkpoint is
+   never loaded.
+3. `_decode_latent` calls `self._genmol_model.decode_from_latent(...)`, which does
+   not exist on `MolVAE`. The resulting `AttributeError` is caught by a bare
+   `except Exception` and logged at debug level.
+4. Every call therefore reaches `_fallback_generate`, which hashes the first four
+   of 128 latent dimensions into a twelve-entry hardcoded scaffold list:
+   `int(|z[:4].sum()| * 1000) % 12`.
+
+A twenty-step episode returns eight distinct molecules, all verbatim from that
+list, with plausible-looking rewards and no error. The failure is silent by
+construction, which is why it survived to publication.
+
+**The fix is smaller than it appears.** `MolVAE.decode(z, temperature, greedy)`
+already exists; nothing new is added to the model. The path becomes:
+
+```python
+def _init_genmol(self) -> None:
+    from neorx.genmol import load_pretrained     # raises GenMolAssetError
+    self._genmol_model, self._genmol_tokenizer = load_pretrained()
+
+def _decode_latent(self, z) -> str:
+    ids = self._genmol_model.decode(torch.as_tensor(z).unsqueeze(0))
+    return self._genmol_tokenizer.decode(ids[0])
+```
+
+`_fallback_generate` and the twelve-scaffold list are deleted outright rather
+than made to raise. A fallback that cannot be reached is dead code; a fallback
+that can be reached is the bug. Both `except Exception` clauses in this path go
+with it — a failure to load or decode must surface, not degrade.
+
+**Boundary.** In scope is the environment's generation path: the environment
+decodes real molecules from its latent vector. Out of scope, and remaining in
+sub-project 3, is the CEM planner's inner loop (`planner.py:319-325`), which
+scores its 200 candidates through a learned reward MLP without constructing a
+molecule at all. Making CEM decode changes what the planner optimises — an
+algorithmic change with behavioural consequences, not plumbing.
+
+Note that with the wiring fixed, the environment inherits GenMol's documented
+partial posterior collapse. `decode` defaults to `greedy=False, temperature=1.0`,
+so outputs vary, but they may cluster tightly. That is a known property of the
+trained model, not a defect introduced here, and it shapes how the gate below is
+written.
 
 ### CLI
 
@@ -242,11 +300,20 @@ build wheel → install into a clean venv → cd OUT of the repo → then:
   ✓ import every name in every __all__, across all six subpackages
   ✓ genmol.generate() returns valid molecules from the shipped weights
   ✓ DrugDiscovery-v0 constructs and steps at 244-D obs / 130-D action
+  ✓ its molecules come from the VAE, not the deleted scaffold list
   ✓ "modules" absent from the wheel; genmol assets present in the wheel
   ✓ ruff, mypy, and a coverage ratchet
 ```
 
-Two details that decide whether these gates are meaningful:
+**The scaffold-provenance gate asserts provenance, not diversity.** It runs a
+twenty-step episode and requires that no returned molecule appears in the
+twelve-string list that `_fallback_generate` used, pinned as a test fixture. It
+does *not* assert that the molecules are diverse: with partial posterior collapse
+they may cluster, and a diversity assertion would fail for a reason unrelated to
+what the gate is checking. Diversity is a model-quality question, and belongs to
+whatever work retrains the model — not to a packaging gate.
+
+Two further details that decide whether these gates are meaningful:
 
 - **Coverage is a ratchet, not an invented number.** The gate is set to the
   coverage measured on the first green build and may not decrease. No target
@@ -255,16 +322,15 @@ Two details that decide whether these gates are meaningful:
 - **No CI gate may depend on a live external API.** The eight upstream databases
   drift and rate-limit, and a flaky gate is worse than none. Anything requiring
   network lives in a nightly job whose failure opens an issue rather than
-  blocking a merge.
+  blocking a merge. The environment gate satisfies this: it runs on a prebuilt
+  synthetic graph and the shipped weights, entirely offline.
 
 `cd`-ing out of the repository matters as much as the src layout: it is what
 forces the test to exercise the installed artifact rather than the source tree.
 
-**One gate is introduced as an expected failure.** A test asserting that
-`DrugDiscovery-v0` generates via the real VAE rather than the twelve-scaffold
-fallback is added here as `xfail`, documenting the known defect. Sub-project 3
-fixes the wiring and flips it to a hard gate. This keeps CI honest without
-turning it red on a defect this sub-project has deliberately scoped out.
+**Every gate here is a hard gate.** This sub-project introduces no `xfail`.
+Because the generation wiring is now in scope, the scaffold-provenance test is a
+real gate from the first green build rather than a documented defect.
 
 ---
 
@@ -280,7 +346,8 @@ Settled during design, recorded so they are not relitigated:
 | Dependencies | All mandatory | Simplest to maintain and document; every documented example works |
 | `vina` | Extra | Native build; mandatory would break installs |
 | Python floor | 3.12 | Nothing needs 3.13; 3.12 widens reach materially |
-| Fix scope | Plumbing here, correctness in SP3 | Keeps this sub-project reviewable |
+| Fix scope | Plumbing here, plus the generation wiring; remaining correctness in SP3 | The wiring decides whether the shipped environment produces real molecules or twelve fixed strings — too central to defer |
+| CEM inner-loop decoding | Deferred to SP3 | Changes what the planner optimises; algorithmic, not plumbing |
 | `modules/` shim | Yes, repo-only, removed in 0.3.0 | Protects 25 untracked, unrecoverable scripts |
 
 ---
@@ -294,6 +361,8 @@ Settled during design, recorded so they are not relitigated:
 | 16 MB binary in git | Acceptable one-time cost; changes once per model release. Revisit git-lfs only if additional checkpoints ship |
 | Relaxed dependency floors break at runtime on older versions | CI matrix installs the floor versions and runs the smoke suite |
 | Untracked root scripts break despite the shim | They are exercised manually before the shim is removed in 0.3.0 |
+| Deleting `_fallback_generate` turns a silent degradation into a hard failure in code paths that relied on it | Intended. The scaffold list is pinned as a test fixture before deletion, so the gate can still detect a regression to it |
+| Posterior collapse makes environment molecules cluster, and a future contributor reads that as the wiring being broken | The gate asserts provenance, not diversity, and the spec records why. Model quality is out of scope here |
 | SP3's correctness fixes invalidate manuscript numbers | `v0.1.0-paper` tag pins a reproducible state |
 
 ---
@@ -311,13 +380,16 @@ Verified in CI on every change:
    seed. Asserting "exactly five distinct from `n=5`" would be a flaky gate.
 3. `unzip -l` on the wheel shows `neorx/genmol/assets/molvae_chembl36.pt` and
    no `modules/` entry.
-4. The existing test suite passes with unchanged behaviour after the move.
-5. Installing the declared dependency floors and running the smoke suite
+4. A twenty-step `DrugDiscovery-v0` episode, on a synthetic graph and the shipped
+   weights, returns molecules of which none appears in the twelve-string scaffold
+   list (pinned as a fixture). Provenance only — diversity is not asserted.
+5. The existing test suite passes with unchanged behaviour after the move.
+6. Installing the declared dependency floors and running the smoke suite
    succeeds.
 
 Verified out of band, because it depends on eight live external APIs and takes
 several minutes per disease:
 
-6. `neorx run HIV --top-n 5` completes end to end from the installed package.
+7. `neorx run HIV --top-n 5` completes end to end from the installed package.
    Run manually before each release and in a nightly job; a failure opens an
    issue rather than blocking a merge.
