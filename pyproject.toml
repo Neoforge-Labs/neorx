@@ -91,20 +91,16 @@ mirrorfold = "modules.mirrorfold.__main__:main"
 neorx = "modules.neorx.__main__:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["neorx", "modules"]
+packages = ["src/neorx"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "neorx/",
-    "modules/",
-    "main.py",
+    "src/neorx/",
+    "tests/",
     "README.md",
     "LICENSE",
+    "CHANGELOG.md",
     "pyproject.toml",
-    "init/",
-    "docker-compose.yml",
-    "Dockerfile",
-    ".env.example",
 ]
 
 [dependency-groups]
@@ -117,7 +113,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["modules"]
+testpaths = ["tests"]
 addopts = "-q --tb=short"
 filterwarnings = [
     "ignore::DeprecationWarning:pkg_resources",
@@ -125,12 +121,8 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["modules"]
-omit = [
-    "*/tests/*",
-    "*/__main__.py",
-    "*/templates/*",
-]
+source = ["src/neorx"]
+omit = ["*/tests/*", "*/__main__.py", "*/templates/*"]
 
 [tool.coverage.report]
 show_missing = true
@@ -151,7 +143,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 ignore = ["E501", "B008", "B905", "SIM108"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["modules", "neorx"]
+known-first-party = ["neorx"]
 
 [tool.mypy]
 python_version = "3.13"

@@ -19,7 +19,7 @@ Programmatic usage::
 
 def main() -> None:
     """Delegate to the NeoRx CLI."""
-    from modules.neorx.__main__ import main as cli_main
+    from neorx.core.__main__ import main as cli_main
 
     cli_main()
 
