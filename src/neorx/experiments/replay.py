@@ -60,7 +60,7 @@ def replay_experiment(run_id: str, *, runs_dir: Path | None = None) -> ReplayRes
     replay_rec = RunRecord.create(f"{defn.name}-replay", runs_dir=runs_dir)
 
     has_cassette = cassette_path(original).exists()
-    if has_cassette:
+    if defn.captures_http and has_cassette:
         shutil.copy2(cassette_path(original), cassette_path(replay_rec))
         with capture(replay_rec, mode="replay"):
             defn.fn(replay_rec)

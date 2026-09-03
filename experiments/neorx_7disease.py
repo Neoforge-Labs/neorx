@@ -23,11 +23,9 @@ be replayed exactly.
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 
-from neorx.experiments.capture import capture
 from neorx.experiments.chembl import chembl_provenance
 from neorx.experiments.record import RunRecord
 from neorx.experiments.registry import experiment
@@ -57,22 +55,17 @@ class UnvalidatableDiseaseError(RuntimeError):
     """
 
 
-def _capture_enabled() -> bool:
-    """Recording is on unless explicitly disabled (tests disable it)."""
-    return os.environ.get("NEORX_EXP_CAPTURE", "1") != "0"
-
-
-@experiment(name="neorx-7disease", help="Causal target benchmark across 7 diseases.")
+@experiment(
+    name="neorx-7disease",
+    help="Causal target benchmark across 7 diseases.",
+    captures_http=True,
+)
 def neorx_7disease(record: RunRecord) -> None:
     if CHEMBL_DB.exists():
         prov = chembl_provenance(CHEMBL_DB)
         (record.path / "inputs" / "chembl.json").write_text(json.dumps(prov, indent=2))
 
-    if _capture_enabled():
-        with capture(record, mode="record"):
-            _run_all(record)
-    else:
-        _run_all(record)
+    _run_all(record)
 
 
 def _run_all(record: RunRecord) -> None:

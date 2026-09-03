@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from neorx.experiments.capture import capture
 from neorx.experiments.record import RunRecord
 
 ExperimentFn = Callable[[RunRecord], None]
@@ -25,18 +26,27 @@ class ExperimentDef:
     name: str
     help: str
     fn: ExperimentFn
+    captures_http: bool = False
 
 
 _REGISTRY: dict[str, ExperimentDef] = {}
 
 
-def experiment(*, name: str, help: str = "") -> Callable[[ExperimentFn], ExperimentFn]:
-    """Register an experiment under ``name``."""
+def experiment(
+    *, name: str, help: str = "", captures_http: bool = False
+) -> Callable[[ExperimentFn], ExperimentFn]:
+    """Register an experiment under ``name``.
+
+    ``captures_http`` declares that the experiment needs its HTTP traffic
+    recorded. An experiment never chooses the capture *mode* -- only the
+    caller (a live run vs. a replay) knows whether that should be record
+    or replay -- so it only declares the need; the runner decides the mode.
+    """
 
     def decorate(fn: ExperimentFn) -> ExperimentFn:
         if name in _REGISTRY:
             raise ValueError(f"experiment {name!r} is already registered")
-        _REGISTRY[name] = ExperimentDef(name=name, help=help, fn=fn)
+        _REGISTRY[name] = ExperimentDef(name=name, help=help, fn=fn, captures_http=captures_http)
         return fn
 
     return decorate
@@ -64,7 +74,11 @@ def run_experiment(
     defn = get_experiment(name)
     record = RunRecord.create(name, runs_dir=runs_dir, allow_large=allow_large)
     try:
-        defn.fn(record)
+        if defn.captures_http:
+            with capture(record, mode="record"):
+                defn.fn(record)
+        else:
+            defn.fn(record)
     except BaseException:
         record.finalise("failed")
         raise

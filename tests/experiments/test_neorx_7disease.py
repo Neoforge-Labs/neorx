@@ -51,7 +51,6 @@ def test_a_disease_row_is_written_before_the_next_starts(tmp_path, monkeypatch):
         }
 
     monkeypatch.setattr(mod, "_evaluate_disease", fake_evaluate)
-    monkeypatch.setattr(mod, "_capture_enabled", lambda: False)
 
     rec = RunRecord.create("neorx-7disease", runs_dir=tmp_path)
     with pytest.raises(RuntimeError):
@@ -129,7 +128,6 @@ def test_an_unvalidatable_disease_fails_the_run_but_keeps_prior_rows(tmp_path, m
         raise mod.UnvalidatableDiseaseError(f"{disease!r} has no ground truth")
 
     monkeypatch.setattr(mod, "_evaluate_disease", fake_evaluate)
-    monkeypatch.setattr(mod, "_capture_enabled", lambda: False)
     monkeypatch.setattr(mod, "DISEASES", mod.DISEASES[:2])
 
     with pytest.raises(mod.UnvalidatableDiseaseError):
@@ -169,7 +167,6 @@ def test_every_row_carries_the_full_schema(tmp_path, monkeypatch):
             "t_identify": 1.0,
         },
     )
-    monkeypatch.setattr(mod, "_capture_enabled", lambda: False)
 
     rec = RunRecord.create("neorx-7disease", runs_dir=tmp_path)
     mod.neorx_7disease(rec)
