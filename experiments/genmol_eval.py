@@ -7,10 +7,11 @@ cassette is recorded.
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import Crippen, Descriptors, QED
+from rdkit.Chem import QED, Crippen, Descriptors
 
 from neorx.experiments.record import RunRecord
 from neorx.experiments.registry import experiment
@@ -46,8 +47,8 @@ def genmol_eval(record: RunRecord) -> None:
     valid = [(s, m) for s, m in mols if m is not None]
     unique = {s for s, _ in valid}
 
-    mw = [Descriptors.MolWt(m) for _, m in valid]
-    logp = [Crippen.MolLogP(m) for _, m in valid]
+    mw = [Descriptors.MolWt(m) for _, m in valid]  # type: ignore[attr-defined]
+    logp = [Crippen.MolLogP(m) for _, m in valid]  # type: ignore[attr-defined]
     qed = [QED.qed(m) for _, m in valid]
 
     record.append_row(
@@ -83,7 +84,7 @@ def _novelty(generated: set[str]) -> float:
     return len(generated - training) / len(generated)
 
 
-def _distinct_mols(valid: list[tuple[str, object]]) -> list:
+def _distinct_mols(valid: Sequence[tuple[str, object]]) -> list:
     """One RDKit Mol per distinct SMILES in ``valid``, first occurrence kept.
 
     ``valid`` is raw sampler output and may repeat the same molecule many
@@ -116,7 +117,10 @@ def _diversity(mols: list) -> float:
     sample = mols[:500]
     if len(sample) < 2:
         return 0.0
-    fps = [AllChem.GetMorganFingerprintAsBitVect(m, 2, 2048) for m in sample]
+    fps = [
+        AllChem.GetMorganFingerprintAsBitVect(m, 2, 2048)  # type: ignore[attr-defined]
+        for m in sample
+    ]
     sims = [
         s
         for i, fp in enumerate(fps[:-1])

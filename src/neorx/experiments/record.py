@@ -15,7 +15,7 @@ import hashlib
 import json
 import platform
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -48,13 +48,10 @@ class RunIDCollisionError(RuntimeError):
 
 
 def _git(*args: str) -> str:
-    result = subprocess.run(
-        ["git", *args], capture_output=True, text=True, check=False
-    )
+    result = subprocess.run(["git", *args], capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise ProvenanceError(
-            f"git {' '.join(args)} failed (exit {result.returncode}): "
-            f"{result.stderr.strip()}"
+            f"git {' '.join(args)} failed (exit {result.returncode}): {result.stderr.strip()}"
         )
     return result.stdout.strip()
 
@@ -89,6 +86,11 @@ class RunRecord:
         self.citable = False
         self._allow_large = allow_large
         self._n_rows = 0
+        # Set by create() only -- a record produced by load() never learns
+        # its start time or experiment name from these fields (finalise()
+        # falls back to run_id via getattr for the latter).
+        self._started: datetime | None = None
+        self._experiment: str | None = None
 
     # -- construction --------------------------------------------------
 
@@ -100,7 +102,7 @@ class RunRecord:
         runs_dir: Path | None = None,
         allow_large: bool = False,
     ) -> RunRecord:
-        started = datetime.now(timezone.utc)
+        started = datetime.now(UTC)
         sha = _git_sha()
         digest = hashlib.sha256(f"{started.isoformat()}{sha}".encode()).hexdigest()[:6]
         run_id = f"{started:%Y-%m-%d}-{experiment}-{digest}"
@@ -181,7 +183,7 @@ class RunRecord:
                     "citable": self.citable,
                     "n_rows": self._n_rows,
                     "size_bytes": size,
-                    "finalised_utc": datetime.now(timezone.utc).isoformat(),
+                    "finalised_utc": datetime.now(UTC).isoformat(),
                 },
                 indent=2,
             )

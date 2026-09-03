@@ -64,3 +64,7 @@ chembl_*.db
 # of MB of these).
 .backup-scripts/
 checkpoints/
+
+# Experiment run records are deliverables, not scratch -- they are the
+# evidence behind every reported number. See docs/run-manifest.toml.
+!runs/

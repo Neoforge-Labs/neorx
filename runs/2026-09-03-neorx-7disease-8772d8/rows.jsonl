@@ -1,0 +1,1 @@
+{"F1": 0.545, "P": 0.429, "R": 0.75, "causal": 7, "corr_F1": 0.16666666666666669, "corr_P": 0.1, "corr_R": 0.5, "corr_fp": [], "demoted": [], "disease": "HIV", "found": 20, "fp": [], "fp_ranks": {}, "grade": "B", "missed": ["CXCR4"], "t_graph": 136.8, "t_identify": 32.5, "tp": ["CCR5", "CD4", "POL"], "wall_clock_s": 169.3}

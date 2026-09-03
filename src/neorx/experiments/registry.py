@@ -7,9 +7,9 @@ never decides where results go -- the runner does both. That is what makes
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from neorx.experiments.record import RunRecord
 
@@ -47,9 +47,7 @@ def get_experiment(name: str) -> ExperimentDef:
         return _REGISTRY[name]
     except KeyError:
         known = ", ".join(sorted(_REGISTRY)) or "(none registered)"
-        raise UnknownExperimentError(
-            f"no experiment named {name!r}. Available: {known}"
-        ) from None
+        raise UnknownExperimentError(f"no experiment named {name!r}. Available: {known}") from None
 
 
 def list_experiments() -> list[ExperimentDef]:

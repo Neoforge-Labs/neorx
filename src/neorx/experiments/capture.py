@@ -13,9 +13,9 @@ it is imported only by the experiment runner, is active only inside the
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 import vcr
 
@@ -39,7 +39,7 @@ def interaction_count(record: RunRecord) -> int:
     path = cassette_path(record)
     if not path.exists():
         return 0
-    import yaml
+    import yaml  # type: ignore[import-untyped]
 
     data = yaml.safe_load(path.read_text()) or {}
     return len(data.get("interactions", []))

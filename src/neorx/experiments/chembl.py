@@ -11,8 +11,9 @@ such as "Bioassay Ontology 2.0".
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -44,10 +45,8 @@ def chembl_provenance(db_path: Path) -> dict[str, Any]:
             f"could not read the chembl_release table from {db_path}: {exc}"
         ) from exc
     finally:
-        try:
+        with contextlib.suppress(NameError):
             conn.close()
-        except NameError:
-            pass
 
     if not row:
         raise ChEMBLProvenanceError(
@@ -60,7 +59,7 @@ def chembl_provenance(db_path: Path) -> dict[str, Any]:
         "release": row[0],
         "release_date": row[1],
         "size_bytes": stat.st_size,
-        "mtime_utc": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        "mtime_utc": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
     }
 
 
