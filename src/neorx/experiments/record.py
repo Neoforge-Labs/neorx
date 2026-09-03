@@ -29,18 +29,43 @@ class RecordTooLargeError(RuntimeError):
     """Raised when a finalised record exceeds MAX_RECORD_BYTES."""
 
 
+class ProvenanceError(RuntimeError):
+    """Raised when the code provenance of a run cannot be established.
+
+    A run whose git SHA or dirty state cannot be determined has no
+    provenance. It is a failed run, not one that quietly records a
+    fabricated SHA or a false "clean" state.
+    """
+
+
+class RunIDCollisionError(RuntimeError):
+    """Raised when a run ID collides with an existing run directory."""
+
+
 def _git(*args: str) -> str:
-    return subprocess.run(
+    result = subprocess.run(
         ["git", *args], capture_output=True, text=True, check=False
-    ).stdout.strip()
+    )
+    if result.returncode != 0:
+        raise ProvenanceError(
+            f"git {' '.join(args)} failed (exit {result.returncode}): "
+            f"{result.stderr.strip()}"
+        )
+    return result.stdout.strip()
 
 
 def _git_sha() -> str:
-    return _git("rev-parse", "HEAD") or "0" * 40
+    return _git("rev-parse", "HEAD")
 
 
 def _git_dirty() -> bool:
-    return bool(_git("status", "--porcelain"))
+    # ':(top,exclude)runs' anchors the exclusion to the repo root and
+    # excludes the runs/ directory itself, regardless of the process's
+    # current working directory. runs/ holds the run records this module
+    # writes -- it is tracked evidence, not scratch, but its own act of
+    # being written must never make the run that wrote it look dirty.
+    # This checks whether the CODE is dirty, not whether artifacts exist.
+    return bool(_git("status", "--porcelain", "--", ":(top,exclude)runs"))
 
 
 def _dep_versions() -> dict[str, str]:
@@ -77,7 +102,13 @@ class RunRecord:
 
         base = runs_dir if runs_dir is not None else RUNS_DIR
         path = base / run_id
-        (path / "inputs").mkdir(parents=True, exist_ok=True)
+        try:
+            (path / "inputs").mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            raise RunIDCollisionError(
+                f"run id {run_id!r} already exists at {path}; refusing to "
+                "write into an existing run's directory"
+            ) from None
 
         rec = cls(run_id, path, allow_large=allow_large)
         rec._started = started

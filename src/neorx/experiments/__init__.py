@@ -8,13 +8,17 @@ path by which an experiment reports a result without one.
 from neorx.experiments.record import (
     MAX_RECORD_BYTES,
     RUNS_DIR,
+    ProvenanceError,
     RecordTooLargeError,
+    RunIDCollisionError,
     RunRecord,
 )
 
 __all__ = [
     "RunRecord",
     "RecordTooLargeError",
+    "ProvenanceError",
+    "RunIDCollisionError",
     "RUNS_DIR",
     "MAX_RECORD_BYTES",
 ]
