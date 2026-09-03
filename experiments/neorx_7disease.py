@@ -46,6 +46,17 @@ TOP_N = 20
 CHEMBL_DB = Path("chembl_36.db")
 
 
+class UnvalidatableDiseaseError(RuntimeError):
+    """Raised when a configured disease has no ground truth to validate against.
+
+    ``KnownTargetValidator.validate()`` returns ``validated=False`` in this
+    case. Recording precision/recall/F1 as 0.0 when validation could not
+    even run would be a fabricated metric, not a measurement -- exactly
+    what this subsystem exists to make impossible. A disease that cannot
+    be validated must fail the run, not degrade into an invented number.
+    """
+
+
 def _capture_enabled() -> bool:
     """Recording is on unless explicitly disabled (tests disable it)."""
     return os.environ.get("NEORX_EXP_CAPTURE", "1") != "0"
@@ -101,21 +112,21 @@ def _evaluate_disease(disease: str) -> dict:
     targets = identify_causal_targets(graph, top_n=TOP_N)
     t_identify = round(time.perf_counter() - t1, 1)
 
-    target_dicts = [
-        {"gene_symbol": t.gene_name, "is_causal": t.is_causal_target} for t in targets
-    ]
+    target_dicts = [{"gene_symbol": t.gene_name, "is_causal": t.is_causal_target} for t in targets]
     report = validator.validate(disease, target_dicts)
 
-    if report.validated:
-        tp_names = sorted(report.true_positives)
-        fp_names = sorted(report.false_positives_known)
-        missed = sorted(report.missed_targets)
-        P, R, F1 = report.precision, report.recall, report.f1
-        grade = report.quality_grade
-    else:
-        tp_names = fp_names = missed = []
-        P = R = F1 = 0.0
-        grade = "N/A"
+    if not report.validated:
+        raise UnvalidatableDiseaseError(
+            f"{disease!r} has no ground truth to validate against "
+            f"({getattr(report, 'reason', 'validation did not run')}); "
+            f"refusing to record a fabricated P/R/F1 of 0.0"
+        )
+
+    tp_names = sorted(report.true_positives)
+    fp_names = sorted(report.false_positives_known)
+    missed = sorted(report.missed_targets)
+    P, R, F1 = report.precision, report.recall, report.f1
+    grade = report.quality_grade
 
     causal = [t for t in targets if t.is_causal_target]
 
