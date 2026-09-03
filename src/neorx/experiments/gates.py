@@ -9,11 +9,20 @@ Each gate closes one hole the manuscript audit found:
   its rows is not evidence.
 * ``check_cited_runs``        -- a manuscript citing a run that does not
   exist, or one nobody can reproduce.
+
+Known limit of ``find_hardcoded_metrics``: it only matches bare
+``ast.Constant`` float literals. A metric assembled by computation --
+``545 / 1000``, ``round(x, 3)``, an f-string embedding a number, a value
+read from a dict -- is invisible to an AST literal check by construction,
+not by an oversight fixable here. A clean run of this gate means "no
+metric was typed in as a literal"; it does NOT mean "no computed metric
+literal exists anywhere in this file". Treat "0 findings" accordingly.
 """
 
 from __future__ import annotations
 
 import ast
+import decimal
 import json
 import tomllib
 from dataclasses import dataclass
@@ -25,8 +34,8 @@ METRIC_DECIMALS = 3
 #: Values with >=3 decimals that are legitimately constants, not metrics.
 #: Every entry needs a comment saying why -- never widen the pattern instead.
 DEFAULT_ALLOWLIST: set[float] = {
-    1.618,   # golden ratio, used for figure aspect ratios
-    0.001,   # p-value floor in the identifier's proxy
+    1.618,  # golden ratio, used for figure aspect ratios
+    0.001,  # p-value floor in the identifier's proxy
 }
 
 
@@ -42,9 +51,7 @@ def _decimals(text: str) -> int:
     return -exponent if isinstance(exponent, int) and exponent < 0 else 0
 
 
-def find_hardcoded_metrics(
-    path: Path, allowlist: set[float] | None = None
-) -> list[Finding]:
+def find_hardcoded_metrics(path: Path, allowlist: set[float] | None = None) -> list[Finding]:
     """Flag metric-shaped float literals (>= METRIC_DECIMALS decimals)."""
     allowed = DEFAULT_ALLOWLIST if allowlist is None else allowlist
     tree = ast.parse(Path(path).read_text(), filename=str(path))
@@ -57,7 +64,21 @@ def find_hardcoded_metrics(
         try:
             if _decimals(literal) < METRIC_DECIMALS:
                 continue
-        except Exception:
+        except decimal.InvalidOperation:
+            # The gate's entire job is catching metric literals -- a
+            # literal it cannot classify must surface, not vanish. This is
+            # not expected to fire on ordinary Python float syntax; if it
+            # does, someone needs to look at it.
+            findings.append(
+                Finding(
+                    path=str(path),
+                    line=node.lineno,
+                    message=(
+                        f"could not classify literal {literal!r} as a decimal -- "
+                        f"unable to check whether it is a metric; inspect it by hand"
+                    ),
+                )
+            )
             continue
         if node.value in allowed:
             continue
@@ -90,9 +111,11 @@ def check_records_wellformed(runs_dir: Path) -> list[Finding]:
             continue
         data = json.loads(summary.read_text())
         rows_file = run / "rows.jsonl"
-        actual = len(
-            [ln for ln in rows_file.read_text().splitlines() if ln.strip()]
-        ) if rows_file.exists() else 0
+        actual = (
+            len([ln for ln in rows_file.read_text().splitlines() if ln.strip()])
+            if rows_file.exists()
+            else 0
+        )
         if data.get("n_rows") != actual:
             findings.append(
                 Finding(
@@ -124,8 +147,7 @@ def check_cited_runs(manifest: Path, runs_dir: Path) -> list[Finding]:
                     Finding(
                         str(manifest),
                         0,
-                        f"{section}.{citation} cites run {run_id!r}, which is not "
-                        f"in {runs_dir}",
+                        f"{section}.{citation} cites run {run_id!r}, which is not in {runs_dir}",
                     )
                 )
                 continue

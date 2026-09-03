@@ -2,6 +2,7 @@
 
 import json
 
+from neorx.experiments import gates as gates_mod
 from neorx.experiments.gates import (
     check_cited_runs,
     check_records_wellformed,
@@ -11,11 +12,7 @@ from neorx.experiments.gates import (
 
 def test_a_metric_literal_in_figure_code_is_found(tmp_path):
     src = tmp_path / "figures.py"
-    src.write_text(
-        "def fig3():\n"
-        "    neorx_f1 = [0.545, 0.333, 0.556]\n"
-        "    return neorx_f1\n"
-    )
+    src.write_text("def fig3():\n    neorx_f1 = [0.545, 0.333, 0.556]\n    return neorx_f1\n")
     findings = find_hardcoded_metrics(src)
     assert findings, "0.545 is a metric-shaped literal and must be flagged"
     assert findings[0].line == 2
@@ -32,7 +29,7 @@ def test_coarse_constants_are_not_flagged(tmp_path):
 def test_allowlisted_values_are_permitted(tmp_path):
     src = tmp_path / "figures.py"
     src.write_text("GOLDEN = 1.618\n")
-    assert find_hardcoded_metrics(src) == []          # 3 dp, but allowlisted below
+    assert find_hardcoded_metrics(src) == []  # 3 dp, but allowlisted below
     assert find_hardcoded_metrics(src, allowlist=set()) != []
 
 
@@ -53,11 +50,35 @@ def test_row_count_must_match_the_summary(tmp_path):
     assert findings and "5" in findings[0].message and "1" in findings[0].message
 
 
+def test_an_unparseable_literal_is_reported_not_swallowed(tmp_path, monkeypatch):
+    """A literal whose source segment cannot be parsed as a Decimal must
+
+    surface as a Finding, not be silently skipped -- this gate's entire
+    job is catching metric literals, so a literal it cannot classify has
+    to be visible rather than exempted.
+    """
+    src = tmp_path / "figures.py"
+    src.write_text("def fig():\n    x = 0.545\n")
+
+    def broken_get_source_segment(source, node):
+        # Simulate a real-world case where the recovered source text for
+        # the literal is not valid Decimal syntax (e.g. tooling that hands
+        # back a mangled or unexpected span).
+        return "not-a-number"
+
+    monkeypatch.setattr(gates_mod.ast, "get_source_segment", broken_get_source_segment)
+
+    findings = find_hardcoded_metrics(src)
+
+    assert len(findings) == 1
+    assert findings[0].line == 2
+    assert "not-a-number" in findings[0].message
+    assert "could not classify" in findings[0].message
+
+
 def test_a_cited_run_that_does_not_exist_is_found(tmp_path):
     manifest = tmp_path / "run-manifest.toml"
-    manifest.write_text(
-        '[tables]\n"paper1.table2" = "2026-09-03-neorx-7disease-deadbe"\n'
-    )
+    manifest.write_text('[tables]\n"paper1.table2" = "2026-09-03-neorx-7disease-deadbe"\n')
     findings = check_cited_runs(manifest, tmp_path / "runs")
     assert findings and "deadbe" in findings[0].message
 
@@ -68,8 +89,7 @@ def test_a_cited_run_that_is_not_citable_is_found(tmp_path):
     run.mkdir(parents=True)
     (run / "record.json").write_text(
         json.dumps(
-            {"run_id": "2026-09-03-x-aaaaaa", "status": "complete",
-             "citable": False, "n_rows": 0}
+            {"run_id": "2026-09-03-x-aaaaaa", "status": "complete", "citable": False, "n_rows": 0}
         )
     )
     (run / "rows.jsonl").write_text("")
