@@ -27,13 +27,22 @@ class ExperimentDef:
     help: str
     fn: ExperimentFn
     captures_http: bool = False
+    #: Row keys whose value is expected to differ between a run and its
+    #: replay -- wall-clock timings and the like -- and so must not count
+    #: toward the replay's IDENTICAL/DIFFERS verdict. They are still
+    #: reported (see ReplayResult.volatile_diffs), never silently dropped.
+    volatile_fields: tuple[str, ...] = ()
 
 
 _REGISTRY: dict[str, ExperimentDef] = {}
 
 
 def experiment(
-    *, name: str, help: str = "", captures_http: bool = False
+    *,
+    name: str,
+    help: str = "",
+    captures_http: bool = False,
+    volatile_fields: tuple[str, ...] = (),
 ) -> Callable[[ExperimentFn], ExperimentFn]:
     """Register an experiment under ``name``.
 
@@ -41,12 +50,22 @@ def experiment(
     recorded. An experiment never chooses the capture *mode* -- only the
     caller (a live run vs. a replay) knows whether that should be record
     or replay -- so it only declares the need; the runner decides the mode.
+
+    ``volatile_fields`` declares row keys that are expected to differ on
+    every replay (wall-clock timings and similar) -- see
+    ``ExperimentDef.volatile_fields``.
     """
 
     def decorate(fn: ExperimentFn) -> ExperimentFn:
         if name in _REGISTRY:
             raise ValueError(f"experiment {name!r} is already registered")
-        _REGISTRY[name] = ExperimentDef(name=name, help=help, fn=fn, captures_http=captures_http)
+        _REGISTRY[name] = ExperimentDef(
+            name=name,
+            help=help,
+            fn=fn,
+            captures_http=captures_http,
+            volatile_fields=tuple(volatile_fields),
+        )
         return fn
 
     return decorate

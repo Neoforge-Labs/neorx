@@ -35,6 +35,12 @@ class RowDiff:
 class ReplayResult:
     replay_run_id: str
     diffs: list[RowDiff] = field(default_factory=list)
+    #: Diffs on fields the experiment declared ``volatile_fields`` -- e.g.
+    #: wall_clock_s. Never counted toward ``identical``, but always
+    #: reported here rather than silently dropped: a gate must never
+    #: swallow information, only decide what does and doesn't fail a
+    #: verdict.
+    volatile_diffs: list[RowDiff] = field(default_factory=list)
 
     @property
     def identical(self) -> bool:
@@ -68,14 +74,30 @@ def replay_experiment(run_id: str, *, runs_dir: Path | None = None) -> ReplayRes
         defn.fn(replay_rec)
     replay_rec.finalise("complete")
 
+    diffs, volatile_diffs = _diff_rows(
+        original.rows(), replay_rec.rows(), volatile_fields=defn.volatile_fields
+    )
     return ReplayResult(
         replay_run_id=replay_rec.run_id,
-        diffs=_diff_rows(original.rows(), replay_rec.rows()),
+        diffs=diffs,
+        volatile_diffs=volatile_diffs,
     )
 
 
-def _diff_rows(recorded: list[dict], replayed: list[dict]) -> list[RowDiff]:
+def _diff_rows(
+    recorded: list[dict], replayed: list[dict], *, volatile_fields: tuple[str, ...] = ()
+) -> tuple[list[RowDiff], list[RowDiff]]:
+    """Diff two runs' rows, splitting out fields declared volatile.
+
+    Volatile fields (e.g. wall_clock_s) are expected to differ on every
+    replay -- they are excluded from the returned verdict-bearing diffs so
+    a real experiment can ever report IDENTICAL, but they are never
+    dropped: they come back in the second list, still visible to whoever
+    is looking.
+    """
+    volatile = set(volatile_fields)
     diffs: list[RowDiff] = []
+    volatile_diffs: list[RowDiff] = []
     for i in range(max(len(recorded), len(replayed))):
         old = recorded[i] if i < len(recorded) else None
         new = replayed[i] if i < len(replayed) else None
@@ -84,8 +106,9 @@ def _diff_rows(recorded: list[dict], replayed: list[dict]) -> list[RowDiff]:
             continue
         for key in sorted(set(old) | set(new)):
             if old.get(key) != new.get(key):
-                diffs.append(RowDiff(i, key, old.get(key), new.get(key)))
-    return diffs
+                target = volatile_diffs if key in volatile else diffs
+                target.append(RowDiff(i, key, old.get(key), new.get(key)))
+    return diffs, volatile_diffs
 
 
 def prune_record(run_id: str, *, runs_dir: Path | None = None) -> int:

@@ -24,6 +24,23 @@ def _fixture(record: RunRecord) -> None:
         record.append_row({"disease": disease, "F1": 0.5 + i / 10})
 
 
+@experiment(name="replay-timing-fixture", help="", volatile_fields=("wall_clock_s",))
+def _timing_fixture(record: RunRecord) -> None:
+    """Deterministic except for a timing field, like the three real,
+
+    migrated experiments (neorx-7disease, causalbiorl-bench, genmol-eval)
+    which all write wall-clock timing fields on every row. Without
+    volatile_fields, this run could never replay as IDENTICAL -- exactly
+    the defect under test.
+    """
+    import time
+
+    for i, disease in enumerate(["HIV", "malaria"]):
+        record.append_row(
+            {"disease": disease, "F1": 0.5 + i / 10, "wall_clock_s": time.perf_counter()}
+        )
+
+
 @experiment(name="replay-http-fixture", help="", captures_http=True)
 def _http_fixture(record: RunRecord) -> None:
     """Declares captures_http=True, like neorx-7disease -- the fix under test.
@@ -45,6 +62,23 @@ def test_replay_of_a_deterministic_run_is_identical(tmp_path):
     assert result.identical, result.diffs
     assert result.diffs == []
     assert result.replay_run_id != original.run_id
+
+
+def test_a_run_with_a_timing_field_still_replays_as_identical(tmp_path):
+    """The headline claim, exercised against a fixture that actually has a
+
+    timing field -- like every one of the three migrated experiments does.
+    Before volatile_fields, this replay would always report DIFFERS.
+    """
+    original = run_experiment("replay-timing-fixture", runs_dir=tmp_path)
+    result = replay_experiment(original.run_id, runs_dir=tmp_path)
+
+    assert result.identical, result.diffs
+    assert result.diffs == []
+    # The timing delta is real and must not be hidden -- it is reported
+    # separately, just excluded from the identical/differs verdict.
+    assert len(result.volatile_diffs) == 2
+    assert {d.key for d in result.volatile_diffs} == {"wall_clock_s"}
 
 
 def test_a_changed_row_is_reported_by_field(tmp_path):

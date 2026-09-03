@@ -30,7 +30,11 @@ DIFFICULTY = "medium"
 EPISODES = {"causal": 30, "ppo": 50, "sac": 50, "random": 50}
 
 
-@experiment(name="causalbiorl-bench", help="RL agent comparison across control envs.")
+@experiment(
+    name="causalbiorl-bench",
+    help="RL agent comparison across control envs.",
+    volatile_fields=("wall_clock_s",),
+)
 def causalbiorl_bench(record: RunRecord) -> None:
     for env_id in ENVS:
         for agent in AGENTS:

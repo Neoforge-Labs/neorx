@@ -20,7 +20,11 @@ N_GENERATE = 1000
 TEMPERATURE = 0.8
 
 
-@experiment(name="genmol-eval", help="GenMol generation quality metrics.")
+@experiment(
+    name="genmol-eval",
+    help="GenMol generation quality metrics.",
+    volatile_fields=("per_molecule_ms",),
+)
 def genmol_eval(record: RunRecord) -> None:
     from neorx.genmol import generate, load_pretrained
 

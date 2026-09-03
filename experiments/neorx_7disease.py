@@ -59,6 +59,7 @@ class UnvalidatableDiseaseError(RuntimeError):
     name="neorx-7disease",
     help="Causal target benchmark across 7 diseases.",
     captures_http=True,
+    volatile_fields=("wall_clock_s", "t_graph", "t_identify"),
 )
 def neorx_7disease(record: RunRecord) -> None:
     if CHEMBL_DB.exists():
