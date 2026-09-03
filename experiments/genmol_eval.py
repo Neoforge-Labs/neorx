@@ -61,7 +61,7 @@ def genmol_eval(record: RunRecord) -> None:
             "validity": len(valid) / len(smiles) if smiles else 0.0,
             "uniqueness": len(unique) / len(valid) if valid else 0.0,
             "novelty": _novelty(unique),
-            "diversity": _diversity([m for _, m in valid]),
+            "diversity": _diversity(_distinct_mols(valid)),
             "per_molecule_ms": 1000 * elapsed / len(smiles) if smiles else 0.0,
             "mw_mean": float(np.mean(mw)) if mw else 0.0,
             "mw_std": float(np.std(mw)) if mw else 0.0,
@@ -83,12 +83,32 @@ def _novelty(generated: set[str]) -> float:
     return len(generated - training) / len(generated)
 
 
+def _distinct_mols(valid: list[tuple[str, object]]) -> list:
+    """One RDKit Mol per distinct SMILES in ``valid``, first occurrence kept.
+
+    ``valid`` is raw sampler output and may repeat the same molecule many
+    times (see the ``deduplicate=False`` note above). Feeding duplicates to
+    _diversity would score every duplicate pair as similarity 1.0 and
+    deflate the reported diversity -- the metric would be measuring how
+    repetitive the sample is, not how diverse the distinct molecules are.
+    """
+    seen: set[str] = set()
+    out = []
+    for s, m in valid:
+        if s not in seen:
+            seen.add(s)
+            out.append(m)
+    return out
+
+
 def _diversity(mols: list) -> float:
     """1 - mean pairwise Tanimoto over Morgan fingerprints, full pairwise.
 
     The original script sampled a 50-neighbour sliding window over the first
     200 molecules; this computes the real statistic over a capped sample so
-    the number means what its name says.
+    the number means what its name says. Callers must pass distinct
+    molecules -- see ``_distinct_mols`` -- since duplicate pairs score
+    similarity 1.0 and would deflate the result.
     """
     from rdkit import DataStructs
     from rdkit.Chem import AllChem

@@ -1,6 +1,7 @@
 """genmol-eval is offline and deterministic enough to assert on shape."""
 
 import pytest
+from rdkit import Chem
 
 from neorx.experiments.registry import get_experiment, run_experiment
 
@@ -22,9 +23,18 @@ def test_run_records_the_metrics_the_paper_reports(tmp_path):
 
     row = rows[0]
     for key in (
-        "n_params", "vocab_size", "n_generated", "validity",
-        "uniqueness", "novelty", "diversity", "per_molecule_ms",
-        "mw_mean", "mw_std", "logp_mean", "qed_mean",
+        "n_params",
+        "vocab_size",
+        "n_generated",
+        "validity",
+        "uniqueness",
+        "novelty",
+        "diversity",
+        "per_molecule_ms",
+        "mw_mean",
+        "mw_std",
+        "logp_mean",
+        "qed_mean",
     ):
         assert key in row, f"missing {key}"
 
@@ -75,3 +85,34 @@ def test_generate_is_called_without_prefiltering(tmp_path, monkeypatch):
     assert calls.get("validate") is False, calls
     assert calls.get("deduplicate") is False, calls
     assert rec.status == "complete"
+
+
+def test_diversity_is_computed_over_distinct_molecules_not_raw_duplicates():
+    """Duplicates in ``valid`` must not deflate the reported diversity.
+
+    _diversity scores every pair as 1 - Tanimoto similarity, and a molecule
+    paired with itself always scores similarity 1.0. Feeding the raw
+    (non-deduplicated) ``valid`` list to _diversity therefore mixes in a
+    pile of self-pairs and drags the reported number down toward zero even
+    though the *distinct* molecules present are genuinely diverse. This
+    test constructs a ``valid`` list with an obvious duplicate (benzene
+    appears 5 times alongside one different molecule, ethanol) and asserts
+    the reported diversity equals the distinct-only computation -- a
+    tolerant bound like ``0 <= diversity <= 1`` would pass on the broken
+    version and proves nothing.
+    """
+    from experiments.genmol_eval import _distinct_mols, _diversity
+
+    benzene = "c1ccccc1"
+    ethanol = "CCO"
+    # 5 copies of benzene + 1 ethanol: heavily duplicated raw output.
+    valid = [(benzene, Chem.MolFromSmiles(benzene))] * 5 + [(ethanol, Chem.MolFromSmiles(ethanol))]
+
+    distinct_expected = _diversity([Chem.MolFromSmiles(benzene), Chem.MolFromSmiles(ethanol)])
+    reported = _diversity(_distinct_mols(valid))
+
+    assert reported == distinct_expected
+    # Sanity: feeding the raw duplicated list directly (the bug) gives a
+    # different, deflated answer -- proving this test would catch it.
+    raw_mols = [m for _, m in valid]
+    assert _diversity(raw_mols) != reported
