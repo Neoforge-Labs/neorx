@@ -44,6 +44,17 @@ jobs:
             src/neorx/causalbiorl/__init__.py \
             src/neorx/cli/__init__.py \
             src/neorx/molscreen/__main__.py \
+            src/neorx/experiments/__init__.py \
+            src/neorx/experiments/record.py \
+            src/neorx/experiments/registry.py \
+            src/neorx/experiments/capture.py \
+            src/neorx/experiments/chembl.py \
+            src/neorx/experiments/gates.py \
+            src/neorx/experiments/__main__.py \
+            experiments/genmol_eval.py \
+            experiments/causalbiorl_bench.py \
+            experiments/neorx_7disease.py \
+            experiments/figures.py \
             tests/causalbiorl/test_env_generation.py \
             tests/test_cli.py \
             tests/test_public_api.py
@@ -55,6 +66,17 @@ jobs:
             src/neorx/causalbiorl/__init__.py \
             src/neorx/cli/__init__.py \
             src/neorx/molscreen/__main__.py \
+            src/neorx/experiments/__init__.py \
+            src/neorx/experiments/record.py \
+            src/neorx/experiments/registry.py \
+            src/neorx/experiments/capture.py \
+            src/neorx/experiments/chembl.py \
+            src/neorx/experiments/gates.py \
+            src/neorx/experiments/__main__.py \
+            experiments/genmol_eval.py \
+            experiments/causalbiorl_bench.py \
+            experiments/neorx_7disease.py \
+            experiments/figures.py \
             tests/causalbiorl/test_env_generation.py \
             tests/test_cli.py \
             tests/test_public_api.py
@@ -88,8 +110,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: uv sync --group dev
+      # -m "not network": these matrix cells otherwise hit httpbin.org, so a
+      # third-party outage would turn the provenance gates red for reasons
+      # that have nothing to do with this branch. Network tests stay
+      # runnable locally -- just not gating CI.
       - name: Run tests
-        run: uv run python -m pytest -q --tb=short --timeout=120
+        run: uv run python -m pytest -q --tb=short --timeout=120 -m "not network"
       - name: Run tests with coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: |
@@ -97,7 +123,7 @@ jobs:
             --cov=src/neorx \
             --cov-report=xml \
             --cov-report=term-missing \
-            -q --tb=short --timeout=120
+            -q --tb=short --timeout=120 -m "not network"
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         uses: codecov/codecov-action@v4
@@ -152,6 +178,17 @@ jobs:
             src/neorx/causalbiorl/__init__.py \
             src/neorx/cli/__init__.py \
             src/neorx/molscreen/__main__.py \
+            src/neorx/experiments/__init__.py \
+            src/neorx/experiments/record.py \
+            src/neorx/experiments/registry.py \
+            src/neorx/experiments/capture.py \
+            src/neorx/experiments/chembl.py \
+            src/neorx/experiments/gates.py \
+            src/neorx/experiments/__main__.py \
+            experiments/genmol_eval.py \
+            experiments/causalbiorl_bench.py \
+            experiments/neorx_7disease.py \
+            experiments/figures.py \
             tests/causalbiorl/test_env_generation.py \
             tests/test_cli.py \
             tests/test_public_api.py
@@ -163,6 +200,17 @@ jobs:
             src/neorx/causalbiorl/__init__.py \
             src/neorx/cli/__init__.py \
             src/neorx/molscreen/__main__.py \
+            src/neorx/experiments/__init__.py \
+            src/neorx/experiments/record.py \
+            src/neorx/experiments/registry.py \
+            src/neorx/experiments/capture.py \
+            src/neorx/experiments/chembl.py \
+            src/neorx/experiments/gates.py \
+            src/neorx/experiments/__main__.py \
+            experiments/genmol_eval.py \
+            experiments/causalbiorl_bench.py \
+            experiments/neorx_7disease.py \
+            experiments/figures.py \
             tests/causalbiorl/test_env_generation.py \
             tests/test_cli.py \
             tests/test_public_api.py
@@ -184,5 +232,11 @@ jobs:
         run: |
           # Baseline is the coverage of the first green build; it may rise,
           # never fall. Raising the target is sub-project 4's job.
-          pytest --cov=src/neorx --cov-report=term --cov-fail-under=$(cat .coverage-floor)
+          # -m "not network": see the same flag on the test job -- a
+          # third-party outage must not turn this gate red either.
+          pytest --cov=src/neorx --cov-report=term --cov-fail-under=$(cat .coverage-floor) -m "not network"
       - run: ./scripts/check_floors.sh
+
+      - name: Experiment provenance gates
+        run: |
+          pytest tests/test_experiment_gates.py -q

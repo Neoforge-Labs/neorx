@@ -13,6 +13,12 @@ causal graphs.  Each client follows the same pattern:
 
 All clients use ``requests`` and are synchronous.  For
 production, consider ``httpx`` with async support.
+
+All HTTP traffic in this package is subject to recording. When these
+modules run inside ``neorx.experiments.capture``, every request and
+response is frozen into the run's cassette so the run can be replayed
+exactly. Adding a source that uses a client other than ``requests`` will
+silently escape that recording -- see ``neorx/experiments/capture.py``.
 """
 
 from .monarch import query_monarch

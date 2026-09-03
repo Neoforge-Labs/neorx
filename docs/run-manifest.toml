@@ -1,0 +1,17 @@
+# Maps each manuscript claim to the run record backing it.
+# `test_cited_runs_exist` fails if a cited run is missing or not citable,
+# so a number cannot appear in a paper without an artifact behind it.
+#
+# Entries are added as each experiment is migrated (Tasks 6-9). Empty
+# sections are valid: they assert nothing rather than asserting falsely.
+#
+# Commit policy for runs/: a run record is committed only when it backs
+# a claim made here. A non-citable record -- built from a dirty tree,
+# left incomplete, or failed -- can back no claim, so it is never
+# committed; `check_committed_records_are_citable` in
+# src/neorx/experiments/gates.py enforces this. Ad-hoc and smoke runs
+# stay local and are never added to git.
+
+[tables]
+
+[figures]

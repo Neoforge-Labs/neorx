@@ -1,0 +1,105 @@
+"""Experiment registry.
+
+An experiment is a function taking a RunRecord. It never opens a file and
+never decides where results go -- the runner does both. That is what makes
+"a number cannot exist without a record" structural rather than a habit.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+
+from neorx.experiments.capture import capture
+from neorx.experiments.record import RunRecord
+
+ExperimentFn = Callable[[RunRecord], None]
+
+
+class UnknownExperimentError(KeyError):
+    """Raised when no experiment is registered under the given name."""
+
+
+@dataclass(frozen=True)
+class ExperimentDef:
+    name: str
+    help: str
+    fn: ExperimentFn
+    captures_http: bool = False
+    #: Row keys whose value is expected to differ between a run and its
+    #: replay -- wall-clock timings and the like -- and so must not count
+    #: toward the replay's IDENTICAL/DIFFERS verdict. They are still
+    #: reported (see ReplayResult.volatile_diffs), never silently dropped.
+    volatile_fields: tuple[str, ...] = ()
+
+
+_REGISTRY: dict[str, ExperimentDef] = {}
+
+
+def experiment(
+    *,
+    name: str,
+    help: str = "",
+    captures_http: bool = False,
+    volatile_fields: tuple[str, ...] = (),
+) -> Callable[[ExperimentFn], ExperimentFn]:
+    """Register an experiment under ``name``.
+
+    ``captures_http`` declares that the experiment needs its HTTP traffic
+    recorded. An experiment never chooses the capture *mode* -- only the
+    caller (a live run vs. a replay) knows whether that should be record
+    or replay -- so it only declares the need; the runner decides the mode.
+
+    ``volatile_fields`` declares row keys that are expected to differ on
+    every replay (wall-clock timings and similar) -- see
+    ``ExperimentDef.volatile_fields``.
+    """
+
+    def decorate(fn: ExperimentFn) -> ExperimentFn:
+        if name in _REGISTRY:
+            raise ValueError(f"experiment {name!r} is already registered")
+        _REGISTRY[name] = ExperimentDef(
+            name=name,
+            help=help,
+            fn=fn,
+            captures_http=captures_http,
+            volatile_fields=tuple(volatile_fields),
+        )
+        return fn
+
+    return decorate
+
+
+def get_experiment(name: str) -> ExperimentDef:
+    try:
+        return _REGISTRY[name]
+    except KeyError:
+        known = ", ".join(sorted(_REGISTRY)) or "(none registered)"
+        raise UnknownExperimentError(f"no experiment named {name!r}. Available: {known}") from None
+
+
+def list_experiments() -> list[ExperimentDef]:
+    return [_REGISTRY[k] for k in sorted(_REGISTRY)]
+
+
+def run_experiment(
+    name: str,
+    *,
+    allow_large: bool = False,
+    runs_dir: Path | None = None,
+) -> RunRecord:
+    """Execute an experiment, writing its record whatever the outcome."""
+    defn = get_experiment(name)
+    record = RunRecord.create(name, runs_dir=runs_dir, allow_large=allow_large)
+    try:
+        if defn.captures_http:
+            with capture(record, mode="record"):
+                defn.fn(record)
+        else:
+            defn.fn(record)
+    except BaseException:
+        record.finalise("failed")
+        raise
+    record.finalise("complete")
+    return record
