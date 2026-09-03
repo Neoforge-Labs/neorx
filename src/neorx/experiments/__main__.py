@@ -46,5 +46,19 @@ def show_cmd(run_id: str = typer.Argument(..., help="Run ID to inspect.")) -> No
         typer.echo(f"  {row}")
 
 
+@app.command("figure")
+def figure_cmd(
+    from_run: str = typer.Option(..., "--from", help="Run ID to render from."),
+) -> None:
+    """Render manuscript figures from a run record."""
+    import os
+
+    import experiments  # noqa: F401
+
+    os.environ["NEORX_FIGURE_RUN"] = from_run
+    record = run_experiment("figures")
+    typer.echo(f"rendered from {from_run}; figure run {record.run_id}")
+
+
 def main() -> None:
     app()
