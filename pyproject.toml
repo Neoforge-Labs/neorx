@@ -157,6 +157,10 @@ dev = [
     # wheel under test -- must be declared or `uv sync --group dev` in CI
     # leaves it missing and those tests error.
     "build>=1.2",
+    # Records and replays HTTP traffic for experiment run records
+    # (neorx.experiments.capture). A development/experiment tool, not a
+    # runtime requirement of the library.
+    "vcrpy>=8.3",
 ]
 
 [tool.pytest.ini_options]
@@ -165,6 +169,9 @@ addopts = "-q --tb=short"
 filterwarnings = [
     "ignore::DeprecationWarning:pkg_resources",
     "ignore::UserWarning:chembl_webresource_client",
+]
+markers = [
+    "network: test performs real network I/O; deselect with -m 'not network'",
 ]
 
 [tool.coverage.run]
