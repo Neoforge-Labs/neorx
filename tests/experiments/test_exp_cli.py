@@ -1,6 +1,5 @@
 """`neorx exp` is the only supported way to run an experiment."""
 
-import pytest
 from typer.testing import CliRunner
 
 from neorx.cli import app
@@ -14,10 +13,6 @@ def test_exp_is_a_neorx_subcommand():
     assert "exp" in result.stdout
 
 
-@pytest.mark.xfail(
-    reason="neorx-7disease is registered in Task 8; remove this marker then",
-    strict=True,
-)
 def test_exp_list_names_the_registered_experiments():
     result = runner.invoke(app, ["exp", "list"])
     assert result.exit_code == 0
