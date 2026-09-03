@@ -43,12 +43,24 @@ upstream variables at all — no cell type, no ancestry, no assay platform.
 Verified on the star topology `graph_builder` produces: the adjustment set is
 empty for every gene.
 
-**Three reported statistics are manufactured.** `_estimate_causal_effect`
-multiplies heuristic factors and derives `p_value = max(0.001, 0.5 * (1 -
-|effect|))` — a p-value with no data and no null distribution.
-`_bootstrap_confidence_interval` resamples nothing; it adds hand-chosen
-Gaussian noise to deterministic scores, so every confidence interval in the
-manuscripts is a readout of the constants `0.05` and `0.03`.
+**Identifiability is not tested at all.** `identifier.py:274` sets
+`is_identifiable = len(causal_pathway) > 0` — the existence of any path. The
+adjustment set is computed on the line above and never consulted.
+
+**Two confidence intervals are manufactured, and a p-value is dead code.**
+`_estimate_causal_effect` derives `p_value = max(0.001, 0.5 * (1 - |effect|))`,
+a p-value with no data and no null distribution; it is assigned at
+`identifier.py:278` and never used, so it reaches no output. The confidence
+intervals do reach output, and neither is a bootstrap. Both
+`identifier._bootstrap_confidence_interval` and
+`counterfactual.CounterfactualValidator._bootstrap_ci` resample nothing — they
+add `rng.normal(0, 0.05)` and `rng.normal(0, 0.03)` to deterministic scores and
+take percentiles of the spread. Every interval NeoRx reports is a readout of
+those two constants.
+
+By contrast `_sensitivity_analysis` is sound: it removes each source's edges in
+turn and recomputes path strength. Leave-one-source-out robustness survives
+this sub-project unchanged.
 
 The RL half has a defect of the same character. `pipeline.py:812` calls
 `agent.init_hierarchical_planner()` before `agent.train()`. `_reward_fn` is
@@ -196,7 +208,10 @@ aggregatable rather than free text:
 | `no_valid_adjustment_set` | Backdoor paths exist that no candidate set blocks |
 | `treatment_absent` / `outcome_absent` | Node not present in the causal subgraph |
 
-`networkx>=3.4` is pinned and `is_d_separator` imported by name. Every
+`is_d_separator` is imported by name. The declared floor is already
+`networkx>=3.3`; whether that floor supplies `is_d_separator` is settled by
+running `scripts/check_floors.sh`, the repo's existing mechanism, and the floor
+is raised only if that fails — never pre-emptively. Every
 `except Exception: append anyway` is deleted. An exception in identification is
 a bug, not a fallback.
 
@@ -251,9 +266,16 @@ for sub-project 5.
 
 ### Statistics that get deleted
 
-`effect`, `p_value`, and the confidence interval leave the public result. With
-no patient data there is no null distribution and no sampling distribution;
-all three are decoration, and a reviewer will say so.
+`causal_effect`, the dead `p_value`, and `confidence_interval` leave the public
+result. With no patient data there is no null distribution and no sampling
+distribution; all three are decoration, and a reviewer will say so.
+`robustness_score` stays — leave-one-source-out is a real measurement.
+
+`confidence_interval` is a live output with a wide blast radius. Removing it
+touches `core/api.py:169`, `core/__main__.py:238`, `core/report.py:156,163,245`,
+`core/templates/report.html:310`, and `tests/core/test_new_modules.py:229-254`.
+`CounterfactualResult.confidence_interval` and the reasoning strings that
+interpolate it at `counterfactual.py:140,148` go with it.
 
 They are replaced by:
 
@@ -264,8 +286,11 @@ They are replaced by:
 This breaks `CausalTarget`'s public shape. That is the point of the
 sub-project, and the package is pre-1.0.
 
-`_bootstrap_confidence_interval` and the `p_value` computation are removed
-outright rather than deprecated. A gate asserts neither name reappears.
+Both fake-CI functions and the `p_value` computation are removed outright
+rather than deprecated. A gate asserts neither name reappears **within
+`src/neorx/core/causal/`** — the gate must be scoped there, because
+`genmol/evaluation/distribution.py:114` reports a genuine Kolmogorov–Smirnov
+p-value that has nothing to do with this and must not be caught.
 
 ### RL: the planner
 
@@ -387,8 +412,10 @@ Verified in CI on every change:
    evaluation.
 7. `evaluate_actions` returns one reward per action, mutates no environment
    state, and agrees with `step()`'s reward for the same action.
-8. `_bootstrap_confidence_interval`, `p_value`, and `nx.d_separated` appear
-   nowhere in `src/`.
+8. `_bootstrap_confidence_interval`, `_bootstrap_ci`, `p_value`, and
+   `nx.d_separated` appear nowhere in `src/neorx/core/causal/`, and the gate
+   does not flag the legitimate KS p-value in
+   `src/neorx/genmol/evaluation/distribution.py`.
 9. No module in `src/neorx/core/causal/` or `src/neorx/causalbiorl/envs/`
    exceeds 600 lines.
 
