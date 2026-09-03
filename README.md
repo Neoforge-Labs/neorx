@@ -108,7 +108,7 @@ learning agent iteratively explores the target–molecule space:
 ```
 
 ```python
-from neorx import run_rl_pipeline
+from neorx.core import run_rl_pipeline
 
 # RL agent iteratively discovers molecules
 result = run_rl_pipeline("HIV", n_episodes=20, top_n_targets=5)
@@ -284,7 +284,6 @@ for querying and sharing across sessions.
 
 ```
 NeoRx/
-├── main.py                     # Entry point
 ├── pyproject.toml              # Dependencies, build config & CLI scripts
 ├── LICENSE                     # Source Available (Non-Commercial)
 ├── CONTRIBUTING.md             # Contributor guide
@@ -294,47 +293,38 @@ NeoRx/
 ├── Dockerfile
 ├── init/init.sql               # Database schema
 │
-├── neorx/               # Public re-export package (pip install)
-│   └── __init__.py             # `from neorx import run_pipeline`
+├── src/neorx/
+│   ├── __init__.py             # Public re-export: `from neorx import run_pipeline`
+│   │
+│   ├── core/                   # Orchestration module (causal pipeline)
+│   │   ├── pipeline.py         # Linear + RL-driven orchestration
+│   │   ├── report.py           # Interactive HTML reports
+│   │   ├── validator.py        # Known-target validation (7 diseases)
+│   │   ├── literature_validator.py # Literature evidence lookup
+│   │   ├── api.py              # FastAPI REST service
+│   │   ├── cache.py            # File/Redis caching layer
+│   │   ├── __main__.py         # Typer CLI
+│   │   ├── graph/              # Models, graph_builder.py, persistence.py
+│   │   ├── causal/             # identifier.py (d-separation, triangulation),
+│   │   │                       #   counterfactual.py (BioRL bridge)
+│   │   ├── scoring/             # scorer.py (6D composite), admet.py
+│   │   ├── bio/                 # classifier.py, tissue_filter.py (HPA gate)
+│   │   └── sources/             # 8 biomedical database clients:
+│   │                            #   monarch, open_targets, kegg, reactome,
+│   │                            #   string_db, uniprot, pdb, chembl
+│   │
+│   ├── causalbiorl/             # Causal reinforcement learning
+│   │   ├── agents/              # CausalAgent (hierarchical planning)
+│   │   ├── envs/                # Gymnasium envs (toy + DrugDiscovery-v0)
+│   │   └── causal/              # SCM, planner, graph encoder, reward learner
+│   │
+│   ├── genmol/                  # Molecular generation (VAE, ~4.1M params)
+│   ├── molscreen/                # Drug-likeness screening
+│   ├── dockbot/                  # Molecular docking (Vina)
+│   ├── mirrorfold/               # Protein structure prediction
+│   └── cli/                      # Unified `neorx` Typer app
 │
-├── modules/neorx/              # Orchestration module
-│   ├── models.py               # Pydantic data models
-│   ├── graph_builder.py        # Parallel multi-source graph assembly
-│   ├── identifier.py           # Causal inference (d-separation, triangulation)
-│   ├── scorer.py               # 6D composite scoring
-│   ├── pipeline.py             # Linear + RL-driven orchestration
-│   ├── report.py               # Interactive HTML reports
-│   ├── classifier.py           # Disease-type-aware target classification
-│   ├── validator.py            # Known-target validation (7 diseases)
-│   ├── tissue_filter.py        # HPA tissue expression boolean gate
-│   ├── counterfactual.py       # Counterfactual validation + BioRL bridge
-│   ├── literature_validator.py # Literature evidence lookup
-│   ├── api.py                  # FastAPI REST service
-│   ├── cache.py                # File/Redis caching layer
-│   ├── persistence.py          # Graph save/load/export
-│   ├── admet.py                # Multi-rule ADMET prediction
-│   ├── __main__.py             # Typer CLI
-│   ├── data_sources/           # 8 biomedical database clients
-│   │   ├── monarch.py          #   Monarch Initiative (REST v3)
-│   │   ├── open_targets.py     #   Open Targets (GraphQL)
-│   │   ├── kegg.py             #   KEGG pathways
-│   │   ├── reactome.py         #   Reactome pathways
-│   │   ├── string_db.py        #   STRING PPIs
-│   │   ├── uniprot.py          #   UniProt metadata
-│   │   ├── pdb.py              #   RCSB PDB structures
-│   │   └── chembl.py           #   ChEMBL v36 (local SQLite)
-│   └── tests/
-│
-├── modules/causalbiorl/        # Causal reinforcement learning
-│   ├── agents/                 # CausalAgent (hierarchical planning)
-│   ├── envs/                   # Gymnasium envs (toy + DrugDiscovery-v0)
-│   ├── causal/                 # SCM, planner, graph encoder, reward learner
-│   └── tests/
-│
-├── modules/genmol/             # Molecular generation (VAE, ~4.1M params)
-├── modules/molscreen/          # Drug-likeness screening
-├── modules/dockbot/            # Molecular docking (Vina)
-├── modules/mirrorfold/         # Protein structure prediction
+├── tests/                        # Mirrors src/; imports the installed package
 │
 ├── papers/                     # Research papers (Markdown source)
 │   ├── latex/                  # Generated LaTeX + PDF outputs
@@ -349,13 +339,13 @@ NeoRx/
 
 ```bash
 # Run all tests
-uv run python -m pytest modules/ -q
+uv run python -m pytest tests/ -q
 
 # Run a specific module's tests
-uv run python -m pytest modules/neorx/tests/ -v
+uv run python -m pytest tests/core/ -v
 
 # Run with coverage
-uv run python -m pytest modules/ --cov=modules --cov-report=term-missing
+uv run python -m pytest tests/ --cov=src/neorx --cov-report=term-missing
 
 # Lint
 uv run ruff check .

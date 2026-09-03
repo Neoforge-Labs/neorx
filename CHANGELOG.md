@@ -7,10 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.2.0] — 2026-03-29
+## [0.2.0] — 2026-09-02
+
+### Changed
+- **Breaking:** `modules.*` imports become `neorx.*`; `modules.neorx` becomes
+  `neorx.core`. The `modules/` compatibility shim was removed outright rather
+  than deprecated -- there is no shim in 0.2.x, and old `modules.*` imports
+  simply no longer exist. (The plan that shipped with this release assumed a
+  shim deprecated through 0.2.x and removed in 0.3.0; that step was dropped
+  during implementation.)
+- Package moves to a `src/` layout, so tests exercise the installed artifact.
+- Python floor lowered from 3.13 to 3.12; dependency floors correspondingly
+  reassessed (see Fixed).
+- `pandas` is replaced with `polars` throughout (was not part of the original
+  plan for this release; `benchmark.py`'s reporting is the only affected
+  call site).
+- Five console scripts unified under `neorx <module> <command>`. The old
+  script names remain as deprecated aliases through 0.2.x.
 
 ### Added
-
+- All six modules exposed through the public API. `molscreen` previously
+  exported nothing.
+- Trained GenMol weights ship as package data; `load_pretrained()` raises
+  `GenMolAssetError` rather than returning an untrained model.
 - **CausalBioRL integration** — RL agent now drives the full drug
   discovery pipeline through `DrugDiscoveryEnv` (Gymnasium).
 - **`run_rl_pipeline()`** — RL-driven alternative to the linear
@@ -30,22 +49,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **CounterfactualValidator bridge** — `validate_with_biorl_scm()` method
   delegates to the shared SCM when CausalBioRL is available.
 - **DrugDiscovery-v0** environment registered in Gymnasium.
-
-### Fixed
-
-- **SCM self-loop bug** — autoregressive dependencies (`s0→s0`) were
-  being stripped, preventing linear mechanisms from seeing state input.
-- **Matplotlib `tostring_rgb` deprecation** — all 3 toy env renderers
-  now use `buffer_rgba()` (works on macOS and headless Linux).
-- **Pydantic v2 deprecation** — `class Config` replaced with
-  `model_config = ConfigDict(...)` in `EpisodeResult` and
-  `BenchmarkResult`.
-- **Docstring escape sequence** — invalid `\s` in planner docstring.
-- **SCM test flakiness** — increased learning rate for reliable
-  convergence in unit tests.
-
-### Infrastructure
-
 - **GitHub Actions CI** — lint (Ruff), test (pytest on Ubuntu + macOS),
   type check (mypy), coverage upload (Codecov).
 - **CONTRIBUTING.md** — contributor guide with style, testing, and PR
@@ -56,6 +59,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **pytest-cov integration** — coverage config with source filtering.
 - **Expanded .gitignore** — reports/, results/, *.pdb, *.pdbqt, model
   weights, IDE files, OS files.
+
+### Fixed
+- `DrugDiscovery-v0` now generates through the trained VAE. It previously
+  built an unvocabularised tokenizer and a randomly initialised model, called
+  a `decode_from_latent` method that does not exist, swallowed the resulting
+  `AttributeError`, and returned one of twelve hardcoded scaffolds.
+- `DrugDiscoveryEnv` now rejects a `latent_dim` that does not match the
+  shipped VAE's, instead of silently constructing a mismatched network (not
+  part of the original plan; found while wiring the previous fix).
+- Four dependency floors (`numpy`, `rdkit`, `pyyaml`, `psycopg2-binary`) had
+  been raised past their true minimum on the reasoning that no cp313 wheel
+  existed for the lower version on macOS arm64 -- but a floor is a lower
+  bound, not a pin, so a wheel gap on a newer interpreter never justifies
+  raising it. Re-derived from declared dependency constraints and actual
+  binary/API compatibility, verified on Python 3.12.
+- **SCM self-loop bug** — autoregressive dependencies (`s0→s0`) were
+  being stripped, preventing linear mechanisms from seeing state input.
+- **Matplotlib `tostring_rgb` deprecation** — all 3 toy env renderers
+  now use `buffer_rgba()` (works on macOS and headless Linux).
+- **Pydantic v2 deprecation** — `class Config` replaced with
+  `model_config = ConfigDict(...)` in `EpisodeResult` and
+  `BenchmarkResult`.
+- **Docstring escape sequence** — invalid `\s` in planner docstring.
+- **SCM test flakiness** — increased learning rate for reliable
+  convergence in unit tests.
 
 ## [0.1.0] — 2026-03-29
 

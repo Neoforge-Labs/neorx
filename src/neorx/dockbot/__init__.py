@@ -1,0 +1,79 @@
+"""
+DockBot — Automated Molecular Docking Pipeline
+=================================================
+
+DockBot automates the full molecular docking workflow:
+
+1. **Protein preparation** — fetch from PDB, clean, convert to PDBQT.
+2. **Ligand preparation** — SMILES → 3D → MMFF94 minimise → PDBQT.
+3. **Binding-site detection** — co-crystal ligand / fpocket / manual.
+4. **Docking** — AutoDock Vina (Python bindings or CLI).
+5. **Parallel screening** — multiprocessing with resume capability.
+6. **Composite scoring** — Vina affinity + QED + SA + filter pass-rate.
+7. **Visualisation** — py3Dmol 3D viewers + matplotlib summary charts.
+8. **Reporting** — self-contained HTML reports with ranked tables.
+
+Quick start::
+
+    from neorx.dockbot import prepare_protein, prepare_ligand_pdbqt, dock
+
+    protein = prepare_protein("1BNA")
+    mol, pdbqt = prepare_ligand_pdbqt("CC(=O)Oc1ccccc1C(O)=O", name="aspirin")
+    result = dock(protein.pdbqt_path, pdbqt, site)
+"""
+
+from . import (  # noqa: F401,E402
+    binding_site,
+    docker,
+    ligand_prep,
+    parallel,
+    protein_prep,
+    report,
+    scorer,
+    viz,
+)
+from .docker import dock  # noqa: F401,E402
+from .ligand_prep import prepare_ligand, prepare_ligand_pdbqt  # noqa: F401,E402
+from .models import (
+    BindingSite,
+    BindingSiteMethod,
+    BindingSiteRequest,
+    DockingPose,
+    DockingResult,
+    DockRequest,
+    JobStatus,
+    ProteinInfo,
+    ScreeningJob,
+    ScreeningResult,
+    ScreenRequest,
+)
+from .protein_prep import prepare_protein  # noqa: F401,E402
+
+__all__ = [
+    # Models
+    "BindingSite",
+    "BindingSiteMethod",
+    "BindingSiteRequest",
+    "DockingPose",
+    "DockingResult",
+    "DockRequest",
+    "JobStatus",
+    "ProteinInfo",
+    "ScreeningJob",
+    "ScreeningResult",
+    "ScreenRequest",
+    # Quick-start entry points (see module docstring)
+    "prepare_protein",
+    "prepare_ligand",
+    "prepare_ligand_pdbqt",
+    "dock",
+    # Submodules (lazy access via neorx.dockbot.<submodule>)
+    "protein_prep",
+    "ligand_prep",
+    "binding_site",
+    "docker",
+    "parallel",
+    "scorer",
+    "viz",
+    "report",
+]

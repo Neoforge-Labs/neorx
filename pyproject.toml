@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "neorx"
-version = "0.1.0"
+version = "0.2.0"
 description = "Causal drug target discovery via Pearl's do-calculus — distinguishes genuine causal targets from correlational bystanders"
 readme = "README.md"
 license = "LicenseRef-NeoRx-NonCommercial"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 authors = [
     { name = "Kelyn Paul Njeri" },
 ]
@@ -29,6 +29,7 @@ classifiers = [
     "License :: Other/Proprietary License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Topic :: Scientific/Engineering :: Chemistry",
@@ -45,28 +46,66 @@ dependencies = [
     "meeko>=0.6",
     "gemmi>=0.7",
     "notebook>=7.5.5",
-    "numpy>=2.0",
-    "pandas>=3.0.1",
+    # dowhy>=0.14 declares numpy (>2.0) strictly, so a floor of exactly
+    # 2.0 is uninstallable together with it; 2.0.1 is the smallest legal
+    # value. A floor is a lower bound, not a pin -- pip's resolver picks
+    # the newest numpy with a wheel for whatever interpreter is running,
+    # so wheel gaps on newer interpreters never justify raising this.
+    # Verified installable and passing tests/test_public_api.py on
+    # Python 3.12 / macOS arm64. Caught by scripts/check_floors.sh.
+    # Verified 2026-09-03.
+    "numpy>=2.0.1",
+    # Installed and imported cleanly on Python 3.13 / macOS arm64 via
+    # `uv pip install --python .venv/bin/python polars`; benchmark.py's
+    # pl.DataFrame/write_csv usage and tests/causalbiorl pass against it.
+    # Verified 2026-09-03.
+    "polars>=1.44.1",
     "pydantic>=2.12.5",
     "py3Dmol>=2.4",
-    "rdkit>=2025.9.6",
+    # Not a cp313-wheel question -- rdkit has a real numpy-2 ABI floor.
+    # 2023.9.1 and 2024.3.1 are built against the numpy-1 C API and raise
+    # "AttributeError: _ARRAY_API not found" the moment numpy>=2 (our
+    # floor above) touches them, e.g. DataStructs.ConvertToNumpyArray or
+    # AllChem.EmbedMolecule; 2024.9.1 is the first release built against
+    # numpy 2 and passes the same check. Verified on Python 3.12 / macOS
+    # arm64 with numpy==2.0.1. Verified 2026-09-03.
+    "rdkit>=2024.9.1",
     "requests>=2.32",
     "torch>=2.11.0",
     "torch-geometric>=2.7.0",
     "tqdm>=4.67",
-    "typer>=0.15",
-    "scipy>=1.14",
+    # fastapi[standard]==0.135.2 -> fastapi-cli>=0.0.8 requires
+    # typer>=0.15.1, caught by scripts/check_floors.sh.
+    "typer>=0.15.1",
+    # dowhy>=0.14 requires scipy>=1.15, caught by scripts/check_floors.sh.
+    "scipy>=1.15",
     "seaborn>=0.13",
     "scikit-learn>=1.6",
-    "pyyaml>=6.0",
+    # pyyaml 6.0 has no wheel for any current interpreter and fails to
+    # build from source under modern setuptools/Cython (AttributeError:
+    # 'build_ext' object has no attribute 'cython_sources') -- reproduced
+    # on Python 3.12, not just 3.13, so this is a real toolchain floor,
+    # not a cp313-specific gap. 6.0.1 builds and installs cleanly.
+    # Verified 2026-09-03.
+    "pyyaml>=6.0.1",
     "gymnasium>=1.0",
-    "networkx>=3.0",
+    # dowhy>=0.14 requires networkx>=3.3, caught by scripts/check_floors.sh.
+    "networkx>=3.3",
     "causal-learn>=0.1.3.8",
     "stable-baselines3>=2.7.1",
-    "jinja2>=3.1",
+    # fastapi[standard]==0.135.2 requires jinja2>=3.1.5, caught by
+    # scripts/check_floors.sh.
+    "jinja2>=3.1.5",
     "pyvis>=0.3",
-    "rich>=13.0",
-    "psycopg2-binary>=2.9",
+    # fastapi[standard]==0.135.2 -> fastapi-cli -> rich-toolkit requires
+    # rich>=13.7.1, caught by scripts/check_floors.sh.
+    "rich>=13.7.1",
+    # Not a cp313 issue -- 2.9.0/2.9.1 crash on our declared minimum
+    # interpreter itself: "SystemError: initialization of _psycopg raised
+    # unreported exception" on Python 3.12 (a Py_TPFLAGS_HAVE_GC/C-API
+    # change psycopg2 hadn't yet adapted to). 2.9.2 is the first release
+    # that imports and connects cleanly on Python 3.12. Verified 2026-09-03.
+    "psycopg2-binary>=2.9.2",
     "redis>=5.0",
     "chembl-downloader>=0.5.2",
 ]
@@ -84,27 +123,27 @@ rl = ["stable-baselines3>=2.0"]
 mirror = ["fair-esm>=2.0"]
 
 [project.scripts]
-dockbot = "modules.dockbot.__main__:main"
-genmol = "modules.genmol.__main__:main"
-causalbiorl = "modules.causalbiorl.__main__:main"
-mirrorfold = "modules.mirrorfold.__main__:main"
-neorx = "modules.neorx.__main__:main"
+neorx = "neorx.cli:main"
+# Deprecated aliases, removed in 0.3.0.
+genmol = "neorx.genmol.__main__:main"
+dockbot = "neorx.dockbot.__main__:main"
+causalbiorl = "neorx.causalbiorl.__main__:main"
+mirrorfold = "neorx.mirrorfold.__main__:main"
+
+[tool.hatch.build]
+artifacts = ["src/neorx/genmol/assets/*.pt"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["neorx", "modules"]
+packages = ["src/neorx"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "neorx/",
-    "modules/",
-    "main.py",
+    "src/neorx/",
+    "tests/",
     "README.md",
     "LICENSE",
+    "CHANGELOG.md",
     "pyproject.toml",
-    "init/",
-    "docker-compose.yml",
-    "Dockerfile",
-    ".env.example",
 ]
 
 [dependency-groups]
@@ -114,10 +153,14 @@ dev = [
     "pytest-timeout>=2.3",
     "ruff>=0.9",
     "mypy>=1.14",
+    # Used by tests/test_wheel_contents.py (`python -m build`) to build the
+    # wheel under test -- must be declared or `uv sync --group dev` in CI
+    # leaves it missing and those tests error.
+    "build>=1.2",
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["modules"]
+testpaths = ["tests"]
 addopts = "-q --tb=short"
 filterwarnings = [
     "ignore::DeprecationWarning:pkg_resources",
@@ -125,12 +168,8 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["modules"]
-omit = [
-    "*/tests/*",
-    "*/__main__.py",
-    "*/templates/*",
-]
+source = ["src/neorx"]
+omit = ["*/tests/*", "*/__main__.py", "*/templates/*"]
 
 [tool.coverage.report]
 show_missing = true
@@ -144,17 +183,17 @@ exclude_lines = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py313"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 ignore = ["E501", "B008", "B905", "SIM108"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["modules", "neorx"]
+known-first-party = ["neorx"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
