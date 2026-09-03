@@ -172,6 +172,7 @@ filterwarnings = [
 ]
 markers = [
     "network: test performs real network I/O; deselect with -m 'not network'",
+    "slow: test runs a real experiment; deselect with -m 'not slow'",
 ]
 
 [tool.coverage.run]
