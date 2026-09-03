@@ -16,6 +16,7 @@ import typer
 from neorx.causalbiorl.__main__ import app as causalbiorl_app
 from neorx.core.__main__ import app as core_app
 from neorx.dockbot.__main__ import app as dockbot_app
+from neorx.experiments.__main__ import app as exp_app
 from neorx.genmol.__main__ import app as genmol_app
 from neorx.mirrorfold.__main__ import app as mirrorfold_app
 from neorx.molscreen.__main__ import app as molscreen_app
@@ -35,6 +36,7 @@ app.add_typer(dockbot_app, name="dockbot", help="Molecular docking.")
 app.add_typer(causalbiorl_app, name="causalbiorl", help="Causal RL environments.")
 app.add_typer(mirrorfold_app, name="mirrorfold", help="Mirror-image protein analysis.")
 app.add_typer(molscreen_app, name="molscreen", help="Drug-likeness screening.")
+app.add_typer(exp_app, name="exp", help="Recorded experiments.")
 
 __all__ = ["app", "main"]
 
