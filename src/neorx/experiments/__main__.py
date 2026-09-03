@@ -60,5 +60,30 @@ def figure_cmd(
     typer.echo(f"rendered from {from_run}; figure run {record.run_id}")
 
 
+@app.command("replay")
+def replay_cmd(run_id: str = typer.Argument(..., help="Run ID to replay.")) -> None:
+    """Re-execute a recorded run against its frozen inputs and diff the rows."""
+    import experiments  # noqa: F401
+    from neorx.experiments.replay import replay_experiment
+
+    result = replay_experiment(run_id)
+    if result.identical:
+        typer.echo(f"IDENTICAL  ({run_id} reproduced by {result.replay_run_id})")
+        return
+    typer.echo(f"DIFFERS  ({len(result.diffs)} field(s))")
+    for d in result.diffs:
+        typer.echo(f"  row {d.index}  {d.key}: recorded={d.recorded!r} replayed={d.replayed!r}")
+    raise typer.Exit(code=1)
+
+
+@app.command("prune")
+def prune_cmd(run_id: str = typer.Argument(..., help="Run ID to prune.")) -> None:
+    """Drop a run's frozen inputs, keeping its recorded results."""
+    from neorx.experiments.replay import prune_record
+
+    freed = prune_record(run_id)
+    typer.echo(f"pruned {run_id}: freed {freed / 1e6:.1f} MB; results retained")
+
+
 def main() -> None:
     app()
