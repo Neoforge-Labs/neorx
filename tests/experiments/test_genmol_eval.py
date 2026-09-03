@@ -87,6 +87,47 @@ def test_generate_is_called_without_prefiltering(tmp_path, monkeypatch):
     assert rec.status == "complete"
 
 
+def test_uniqueness_counts_two_spellings_of_one_molecule_once(tmp_path, monkeypatch):
+    """"CCO" and "OCC" are both ethanol -- two spellings of the same
+
+    molecule. Computing uniqueness over raw sampler strings (instead of
+    canonicalising first, as the original _eval_genmol_final.py did) would
+    count them as two distinct molecules, moving uniqueness, novelty, and
+    diversity all in the flattering direction. This must fail against the
+    pre-fix raw-string implementation.
+    """
+    import experiments  # noqa: F401
+    import neorx.genmol as genmol_mod
+    import neorx.genmol.data.download as download_mod
+
+    class _FakeParam:
+        def numel(self) -> int:
+            return 10
+
+    class _FakeModel:
+        def parameters(self):
+            return [_FakeParam()]
+
+    class _FakeTokenizer:
+        vocab_size = 5
+
+    def fake_load_pretrained():
+        return _FakeModel(), _FakeTokenizer()
+
+    def fake_generate(model, tokenizer, **kwargs):
+        return ["CCO", "OCC"]  # two spellings of ethanol
+
+    monkeypatch.setattr(genmol_mod, "load_pretrained", fake_load_pretrained)
+    monkeypatch.setattr(genmol_mod, "generate", fake_generate)
+    monkeypatch.setattr(download_mod, "load_smiles", lambda: [])
+
+    rec = run_experiment("genmol-eval", runs_dir=tmp_path)
+    row = rec.rows()[0]
+
+    assert row["n_valid"] == 2, "validity is measured over raw output -- both entries are valid"
+    assert row["uniqueness"] == 0.5, "one distinct molecule out of two valid entries"
+
+
 def test_diversity_is_computed_over_distinct_molecules_not_raw_duplicates():
     """Duplicates in ``valid`` must not deflate the reported diversity.
 

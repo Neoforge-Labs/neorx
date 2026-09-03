@@ -48,8 +48,17 @@ def genmol_eval(record: RunRecord) -> None:
     elapsed = time.perf_counter() - started
 
     mols = [(s, Chem.MolFromSmiles(s)) for s in smiles]
+    # Validity is measured over RAW sampler output (see the note above) --
+    # that is what makes it measurable at all. But two different spellings
+    # of the same molecule (e.g. "CCO" and "OCC") are the same molecule,
+    # not two: uniqueness, novelty, and distinctness all canonicalise
+    # first, matching the original _eval_genmol_final.py. Without this,
+    # two spellings of one molecule would count as unique, as novel, and
+    # as a similarity-1.0 pair in diversity -- all three metrics moving in
+    # the flattering direction for no chemical reason.
     valid = [(s, m) for s, m in mols if m is not None]
-    unique = {s for s, _ in valid}
+    canonical = [(Chem.MolToSmiles(m), m) for _, m in valid]
+    unique = {c for c, _ in canonical}
 
     mw = [Descriptors.MolWt(m) for _, m in valid]  # type: ignore[attr-defined]
     logp = [Crippen.MolLogP(m) for _, m in valid]  # type: ignore[attr-defined]
@@ -66,7 +75,7 @@ def genmol_eval(record: RunRecord) -> None:
             "validity": len(valid) / len(smiles) if smiles else 0.0,
             "uniqueness": len(unique) / len(valid) if valid else 0.0,
             "novelty": _novelty(unique),
-            "diversity": _diversity(_distinct_mols(valid)),
+            "diversity": _diversity(_distinct_mols(canonical)),
             "per_molecule_ms": 1000 * elapsed / len(smiles) if smiles else 0.0,
             "mw_mean": float(np.mean(mw)) if mw else 0.0,
             "mw_std": float(np.std(mw)) if mw else 0.0,
@@ -79,7 +88,14 @@ def genmol_eval(record: RunRecord) -> None:
 
 
 def _novelty(generated: set[str]) -> float:
-    """Fraction of generated molecules absent from the training corpus."""
+    """Fraction of generated molecules absent from the training corpus.
+
+    ``generated`` must already be canonical SMILES (see ``unique`` above)
+    -- ``load_smiles()``'s corpus is canonical (download.py canonicalises
+    with ``Chem.MolToSmiles`` before writing it), so comparing raw sampler
+    strings against it would undercount novelty for any molecule the
+    sampler happened to spell differently from the corpus's canonical form.
+    """
     from neorx.genmol.data.download import load_smiles
 
     training = set(load_smiles())
@@ -88,18 +104,20 @@ def _novelty(generated: set[str]) -> float:
     return len(generated - training) / len(generated)
 
 
-def _distinct_mols(valid: Sequence[tuple[str, object]]) -> list:
-    """One RDKit Mol per distinct SMILES in ``valid``, first occurrence kept.
+def _distinct_mols(canonical: Sequence[tuple[str, object]]) -> list:
+    """One RDKit Mol per distinct canonical SMILES, first occurrence kept.
 
-    ``valid`` is raw sampler output and may repeat the same molecule many
-    times (see the ``deduplicate=False`` note above). Feeding duplicates to
-    _diversity would score every duplicate pair as similarity 1.0 and
-    deflate the reported diversity -- the metric would be measuring how
-    repetitive the sample is, not how diverse the distinct molecules are.
+    ``canonical`` pairs each valid molecule with its canonical SMILES (see
+    ``canonical`` above) and may repeat the same molecule many times under
+    different raw spellings (see the ``deduplicate=False`` note above).
+    Feeding duplicates -- or two spellings of one molecule -- to
+    _diversity would score that pair as similarity 1.0 and deflate the
+    reported diversity -- the metric would be measuring how repetitive the
+    sample is, not how diverse the distinct molecules are.
     """
     seen: set[str] = set()
     out = []
-    for s, m in valid:
+    for s, m in canonical:
         if s not in seen:
             seen.add(s)
             out.append(m)
