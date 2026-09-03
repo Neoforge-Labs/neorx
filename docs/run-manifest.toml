@@ -1,0 +1,10 @@
+# Maps each manuscript claim to the run record backing it.
+# `test_cited_runs_exist` fails if a cited run is missing or not citable,
+# so a number cannot appear in a paper without an artifact behind it.
+#
+# Entries are added as each experiment is migrated (Tasks 6-9). Empty
+# sections are valid: they assert nothing rather than asserting falsely.
+
+[tables]
+
+[figures]

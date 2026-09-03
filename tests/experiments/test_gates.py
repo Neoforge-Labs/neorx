@@ -1,0 +1,79 @@
+"""The gates that make the guarantee enforceable rather than aspirational."""
+
+import json
+
+from neorx.experiments.gates import (
+    check_cited_runs,
+    check_records_wellformed,
+    find_hardcoded_metrics,
+)
+
+
+def test_a_metric_literal_in_figure_code_is_found(tmp_path):
+    src = tmp_path / "figures.py"
+    src.write_text(
+        "def fig3():\n"
+        "    neorx_f1 = [0.545, 0.333, 0.556]\n"
+        "    return neorx_f1\n"
+    )
+    findings = find_hardcoded_metrics(src)
+    assert findings, "0.545 is a metric-shaped literal and must be flagged"
+    assert findings[0].line == 2
+    assert "0.545" in findings[0].message
+
+
+def test_coarse_constants_are_not_flagged(tmp_path):
+    """Axis limits and thresholds are not metrics."""
+    src = tmp_path / "figures.py"
+    src.write_text("def fig():\n    ax.set_ylim(0, 1.0)\n    alpha = 0.5\n")
+    assert find_hardcoded_metrics(src) == []
+
+
+def test_allowlisted_values_are_permitted(tmp_path):
+    src = tmp_path / "figures.py"
+    src.write_text("GOLDEN = 1.618\n")
+    assert find_hardcoded_metrics(src) == []          # 3 dp, but allowlisted below
+    assert find_hardcoded_metrics(src, allowlist=set()) != []
+
+
+def test_a_record_missing_its_summary_is_malformed(tmp_path):
+    (tmp_path / "2026-09-03-x-aaaaaa").mkdir()
+    findings = check_records_wellformed(tmp_path)
+    assert findings and "record.json" in findings[0].message
+
+
+def test_row_count_must_match_the_summary(tmp_path):
+    run = tmp_path / "2026-09-03-x-aaaaaa"
+    run.mkdir()
+    (run / "record.json").write_text(
+        json.dumps({"run_id": "x", "status": "complete", "citable": True, "n_rows": 5})
+    )
+    (run / "rows.jsonl").write_text('{"a":1}\n')
+    findings = check_records_wellformed(tmp_path)
+    assert findings and "5" in findings[0].message and "1" in findings[0].message
+
+
+def test_a_cited_run_that_does_not_exist_is_found(tmp_path):
+    manifest = tmp_path / "run-manifest.toml"
+    manifest.write_text(
+        '[tables]\n"paper1.table2" = "2026-09-03-neorx-7disease-deadbe"\n'
+    )
+    findings = check_cited_runs(manifest, tmp_path / "runs")
+    assert findings and "deadbe" in findings[0].message
+
+
+def test_a_cited_run_that_is_not_citable_is_found(tmp_path):
+    runs = tmp_path / "runs"
+    run = runs / "2026-09-03-x-aaaaaa"
+    run.mkdir(parents=True)
+    (run / "record.json").write_text(
+        json.dumps(
+            {"run_id": "2026-09-03-x-aaaaaa", "status": "complete",
+             "citable": False, "n_rows": 0}
+        )
+    )
+    (run / "rows.jsonl").write_text("")
+    manifest = tmp_path / "run-manifest.toml"
+    manifest.write_text('[tables]\n"paper1.table2" = "2026-09-03-x-aaaaaa"\n')
+    findings = check_cited_runs(manifest, runs)
+    assert findings and "citable" in findings[0].message.lower()
