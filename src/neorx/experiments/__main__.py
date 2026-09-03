@@ -27,7 +27,7 @@ def list_cmd() -> None:
 def run_cmd(
     name: str = typer.Argument(..., help="Experiment name, from `neorx exp list`."),
     allow_large: bool = typer.Option(
-        False, "--allow-large", help="Permit a record larger than 50 MB."
+        False, "--allow-large", help="Permit a record larger than 250 MB."
     ),
 ) -> None:
     """Run an experiment and write its record."""

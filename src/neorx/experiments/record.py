@@ -20,7 +20,12 @@ from pathlib import Path
 from typing import Any
 
 RUNS_DIR = Path(__file__).resolve().parents[3] / "runs"
-MAX_RECORD_BYTES = 50 * 1024 * 1024
+# ~7 MB per disease measured on a live neorx-7disease run; seven diseases
+# ~= 49 MB, so 250 MB leaves genuine headroom while still catching a
+# runaway snapshot. (The original 50 MB figure was a spec estimate of
+# "5-6 MB per seven-disease run" -- about eight times too low; a full run
+# would have hit refusal after ~25 minutes of live API cost were sunk.)
+MAX_RECORD_BYTES = 250 * 1024 * 1024
 
 _VALID_STATUS = ("complete", "incomplete", "failed")
 

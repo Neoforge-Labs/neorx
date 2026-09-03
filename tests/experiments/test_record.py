@@ -165,7 +165,7 @@ def test_oversized_record_is_refused(tmp_path, monkeypatch):
     rec = RunRecord.create("demo-exp", runs_dir=tmp_path)
     (rec.path / "inputs").mkdir(exist_ok=True)
     (rec.path / "inputs" / "big.json").write_bytes(b"x" * 500)
-    with pytest.raises(RecordTooLargeError, match="50 MB|allow-large|exceeds"):
+    with pytest.raises(RecordTooLargeError, match="MB|allow-large|exceeds"):
         rec.finalise("complete")
 
 
