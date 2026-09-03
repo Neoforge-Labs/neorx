@@ -15,6 +15,14 @@ def test_the_experiment_is_registered():
 @pytest.mark.slow
 def test_run_records_the_metrics_the_paper_reports(tmp_path):
     import experiments  # noqa: F401
+    from neorx.genmol.data.download import _DEFAULT_CSV
+
+    if not _DEFAULT_CSV.exists():
+        pytest.skip(
+            f"ChEMBL corpus not present at {_DEFAULT_CSV} -- run `genmol download` "
+            f"or call download_chembl() first. A missing prerequisite is not a "
+            f"failing behaviour, so this test is skipped rather than failed."
+        )
 
     rec = run_experiment("genmol-eval", runs_dir=tmp_path)
     assert rec.status == "complete"
