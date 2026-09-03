@@ -27,7 +27,19 @@ def genmol_eval(record: RunRecord) -> None:
     n_params = sum(p.numel() for p in model.parameters())
 
     started = time.perf_counter()
-    smiles = generate(model, tokenizer, n=N_GENERATE, temperature=TEMPERATURE)
+    # validate=False, deduplicate=False: generate() otherwise filters
+    # internally, which would make validity and uniqueness structurally
+    # always 1.0 -- reporting a better number than the truth instead of a
+    # measurement. These metrics must be computed over raw sampler output,
+    # matching what the paper actually reported (~0.97 validity).
+    smiles = generate(
+        model,
+        tokenizer,
+        n=N_GENERATE,
+        temperature=TEMPERATURE,
+        validate=False,
+        deduplicate=False,
+    )
     elapsed = time.perf_counter() - started
 
     mols = [(s, Chem.MolFromSmiles(s)) for s in smiles]
