@@ -69,11 +69,22 @@ def replay_cmd(run_id: str = typer.Argument(..., help="Run ID to replay.")) -> N
     result = replay_experiment(run_id)
     if result.identical:
         typer.echo(f"IDENTICAL  ({run_id} reproduced by {result.replay_run_id})")
+        _echo_volatile_diffs(result.volatile_diffs)
         return
     typer.echo(f"DIFFERS  ({len(result.diffs)} field(s))")
     for d in result.diffs:
         typer.echo(f"  row {d.index}  {d.key}: recorded={d.recorded!r} replayed={d.replayed!r}")
+    _echo_volatile_diffs(result.volatile_diffs)
     raise typer.Exit(code=1)
+
+
+def _echo_volatile_diffs(volatile_diffs: list) -> None:
+    """Print volatile-field differences, which never affect the verdict."""
+    if not volatile_diffs:
+        return
+    typer.echo(f"  {len(volatile_diffs)} volatile field(s) differed (excluded from the verdict):")
+    for d in volatile_diffs:
+        typer.echo(f"    row {d.index}  {d.key}: recorded={d.recorded!r} replayed={d.replayed!r}")
 
 
 @app.command("prune")
