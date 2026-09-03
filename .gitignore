@@ -66,5 +66,11 @@ chembl_*.db
 checkpoints/
 
 # Experiment run records are deliverables, not scratch -- they are the
-# evidence behind every reported number. See docs/run-manifest.toml.
+# evidence behind every reported number, IF they are cited. See
+# docs/run-manifest.toml. Default to NOT tracking a run directory (so a
+# routine `git add -A` cannot sweep in an ad-hoc or smoke run); a record
+# that actually backs a claim is added deliberately with
+# `git add -f runs/<run-id>`.
 !runs/
+runs/*
+!runs/.gitkeep

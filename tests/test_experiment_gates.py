@@ -4,6 +4,7 @@ from pathlib import Path
 
 from neorx.experiments.gates import (
     check_cited_runs,
+    check_committed_records_are_citable,
     check_records_wellformed,
     find_hardcoded_metrics,
 )
@@ -25,4 +26,9 @@ def test_every_stored_run_is_wellformed():
 
 def test_every_cited_run_exists_and_is_citable():
     findings = check_cited_runs(REPO / "docs" / "run-manifest.toml", REPO / "runs")
+    assert findings == [], [f.message for f in findings]
+
+
+def test_no_uncitable_record_is_committed():
+    findings = check_committed_records_are_citable(REPO / "runs")
     assert findings == [], [f.message for f in findings]

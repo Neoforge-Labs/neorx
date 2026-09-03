@@ -9,6 +9,9 @@ Each gate closes one hole the manuscript audit found:
   its rows is not evidence.
 * ``check_cited_runs``        -- a manuscript citing a run that does not
   exist, or one nobody can reproduce.
+* ``check_committed_records_are_citable`` -- a non-citable run record
+  (dirty tree, incomplete, or failed) committed to git anyway, adding
+  ~MB of weight to the repository while backing no claim.
 
 Known limit of ``find_hardcoded_metrics``: it only matches bare
 ``ast.Constant`` float literals. A metric assembled by computation --
@@ -24,6 +27,7 @@ from __future__ import annotations
 import ast
 import decimal
 import json
+import subprocess
 import tomllib
 from dataclasses import dataclass
 from decimal import Decimal
@@ -123,6 +127,68 @@ def check_records_wellformed(runs_dir: Path) -> list[Finding]:
                     0,
                     f"{run.name}: record.json claims {data.get('n_rows')} rows "
                     f"but rows.jsonl has {actual}",
+                )
+            )
+    return findings
+
+
+def check_committed_records_are_citable(
+    runs_dir: Path, tracked: set[str] | None = None
+) -> list[Finding]:
+    """Every run record committed to git must be citable.
+
+    ``runs/`` is tracked on the theory that its records are the evidence
+    behind every reported number. A record with ``citable: false`` (built
+    from a dirty tree, or left incomplete or failed) is not evidence --
+    the figure command already refuses to render from one -- so committing
+    it adds weight to the repository without adding anything that backs a
+    claim. ``tracked`` is the set of run-directory names (run IDs) known
+    to be committed; when omitted, it is read from ``git ls-files``.
+    """
+    runs_dir = Path(runs_dir)
+    if not runs_dir.is_dir():
+        return []
+
+    if tracked is None:
+        result = subprocess.run(
+            ["git", "ls-files", "."],
+            cwd=str(runs_dir),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return [
+                Finding(
+                    str(runs_dir),
+                    0,
+                    f"git ls-files failed (exit {result.returncode}): "
+                    f"{result.stderr.strip()} -- could not determine which "
+                    f"records are committed",
+                )
+            ]
+        tracked = {
+            Path(line).parts[0]
+            for line in result.stdout.splitlines()
+            if line.strip()
+        }
+
+    findings: list[Finding] = []
+    for run in sorted(p for p in runs_dir.iterdir() if p.is_dir()):
+        if run.name not in tracked:
+            continue
+        summary = run / "record.json"
+        if not summary.exists():
+            continue  # check_records_wellformed already flags this
+        data = json.loads(summary.read_text())
+        if not data.get("citable"):
+            findings.append(
+                Finding(
+                    str(summary),
+                    0,
+                    f"{run.name}: committed to git but citable=false -- a "
+                    f"non-citable record backs no claim, so committing it "
+                    f"adds weight to the repository without evidence",
                 )
             )
     return findings
