@@ -174,6 +174,10 @@ class RunRecord:
         env = json.loads((self.path / "env.json").read_text())
         self.status = status
         self.citable = status == "complete" and not env["git_dirty"]
+        rows_path = self.path / "rows.jsonl"
+        rows_sha256 = (
+            hashlib.sha256(rows_path.read_bytes()).hexdigest() if rows_path.exists() else None
+        )
         (self.path / "record.json").write_text(
             json.dumps(
                 {
@@ -183,6 +187,7 @@ class RunRecord:
                     "citable": self.citable,
                     "n_rows": self._n_rows,
                     "size_bytes": size,
+                    "rows_sha256": rows_sha256,
                     "finalised_utc": datetime.now(UTC).isoformat(),
                 },
                 indent=2,

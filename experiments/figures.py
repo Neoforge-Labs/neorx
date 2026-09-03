@@ -5,13 +5,24 @@ Figure 3 was a transcription of the paper's table rather than a rendering
 of data. Every data-bearing figure here takes a run ID and reads its
 series from that run's rows.
 
-fig1_pipeline and fig2_hiv_graph are diagrams with no data dependency and
-move across from _gen_figures.py unchanged. fig4_disease_context is a
-categorical classification table with no metric literals in it, so it
-moves across unchanged too. Only fig3_pr_comparison -- which held the
-F1/precision/recall values this migration exists to fix -- now reads its
-series from a run record, with its summary lines computed from that data
-instead of copied from one particular run.
+fig1_pipeline is a diagram with no data dependency and moves across from
+_gen_figures.py unchanged. fig4_disease_context is a categorical
+classification table with no metric literals in it, so it moves across
+unchanged too. Only fig3_pr_comparison -- which held the F1/precision/
+recall values this migration exists to fix -- now reads its series from a
+run record, with its summary lines computed from that data instead of
+copied from one particular run.
+
+fig2_hiv_graph is illustrative: it sketches the *shape* of a causal
+knowledge graph excerpt -- which node types connect to which -- and is
+not a rendering of any one run's numbers. It originally carried the
+per-gene causal confidences of a specific analysis spelled out as
+"C=" -prefixed numeric strings, which was a transcription of measured
+values in every sense that matters, just not one an ``ast.Constant``
+float check could see. It now uses qualitative confidence tiers (STRONG /
+MODERATE / WEAK / INCONCLUSIVE) instead of numbers, and the figure itself
+is titled and captioned "(Illustrative)" so a reader does not mistake the
+diagram for a data figure.
 
 `test_the_figure_module_contains_no_metric_literals` fails if a literal
 reappears in this file.
@@ -205,7 +216,12 @@ def fig1_pipeline() -> None:
 
 
 # ════════════════════════════════════════════════════════════════════
-# Figure 2: HIV Knowledge Graph Excerpt (no data dependency)
+# Figure 2: HIV Knowledge Graph Excerpt (illustrative, no data dependency)
+#
+# This is a sketch of the graph's shape, not a rendering of any run's
+# numbers -- see the module docstring. Confidence tiers are qualitative
+# labels, not measurements; the diagram is titled and captioned
+# accordingly so it cannot be mistaken for a data figure.
 # ════════════════════════════════════════════════════════════════════
 
 
@@ -228,15 +244,20 @@ def fig2_hiv_graph() -> None:
         "RPSA": (10, 4.5, "#FFECB3", "off-target"),
     }
 
+    # Qualitative tiers, not measurements: this figure is illustrative (see
+    # the module docstring and the fig2 section banner above). A prior
+    # version of this dict held per-gene causal confidences as "C="
+    # -prefixed numeric strings, which was a transcription of measured
+    # values just spelled out as text instead of a float literal.
     confidences = {
-        "POL": "C=0.990",
-        "ENV": "C=0.955",
-        "GAG": "C=0.887",
-        "CCR5": "C=0.706",
-        "CD4": "C=0.625",
-        "CXCR4": "C=0.580",
-        "RPOA": "INCON.",
-        "RPSA": "INCON.",
+        "POL": "STRONG",
+        "ENV": "STRONG",
+        "GAG": "STRONG",
+        "CCR5": "MODERATE",
+        "CD4": "MODERATE",
+        "CXCR4": "WEAK",
+        "RPOA": "INCONCLUSIVE",
+        "RPSA": "INCONCLUSIVE",
     }
 
     classifications = {
@@ -304,7 +325,23 @@ def fig2_hiv_graph() -> None:
     ]
     ax.legend(handles=legend_items, loc="upper right", fontsize=8, framealpha=0.9)
 
-    ax.set_title("HIV Causal Knowledge Graph (Excerpt)", fontsize=14, fontweight="bold", pad=15)
+    ax.set_title(
+        "HIV Causal Knowledge Graph (Excerpt, Illustrative)",
+        fontsize=14,
+        fontweight="bold",
+        pad=15,
+    )
+    ax.text(
+        5,
+        -0.85,
+        "Illustrative diagram -- confidence tiers are qualitative labels, "
+        "not measurements from a run.",
+        ha="center",
+        va="top",
+        fontsize=7,
+        style="italic",
+        color="#777",
+    )
 
     fig.savefig(OUT / "fig2_hiv_graph.png")
     fig.savefig(OUT / "fig2_hiv_graph.pdf")
