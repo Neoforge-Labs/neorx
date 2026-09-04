@@ -72,6 +72,7 @@ from neorx.core.graph.models import (
 from neorx.core.graph.graph_builder import disease_graph_to_networkx
 from neorx.core.bio.classifier import TargetClassifier, TargetType, classify_disease
 from neorx.core.bio.tissue_filter import TissueFilter
+from neorx.core.causal.backdoor import find_adjustment_set
 
 logger = logging.getLogger(__name__)
 
@@ -267,11 +268,10 @@ def _evaluate_target(
     # Find paths from target to disease
     causal_pathway = _find_causal_pathway(G, target_id, disease_id)
 
-    # Compute adjustment set (simplified backdoor criterion)
-    adjustment_set = _compute_adjustment_set(G, target_id, disease_id)
-
-    # Check identifiability
-    is_identifiable = len(causal_pathway) > 0
+    # Identification: does the causal subgraph license a claim here?
+    identification = find_adjustment_set(G, target_id, disease_id)
+    adjustment_set = list(identification.adjustment_set)
+    is_identifiable = identification.identifiable
 
     # ── Step 2: Causal Effect Estimation ────────────────────────
 
@@ -364,6 +364,10 @@ def _evaluate_target(
         causal_confidence=causal_confidence,
         confidence_interval=(ci_lo, ci_hi),
         adjustment_set=adjustment_set,
+        identifiable=identification.identifiable,
+        identification_reason=identification.reason.value,
+        n_near_miss_confounders=identification.n_near_miss_confounders,
+        adjustment_search_truncated=identification.search_truncated,
         causal_pathway=causal_pathway,
         robustness_score=robustness,
         druggability_score=druggability,
@@ -516,6 +520,8 @@ def _evaluate_pathogen_target(
         causal_confidence=confidence,
         confidence_interval=(ci_lo, ci_hi),
         adjustment_set=[],
+        identifiable=False,
+        identification_reason="treatment_absent",
         causal_pathway=causal_pathway,
         robustness_score=robustness,
         druggability_score=druggability,
@@ -618,58 +624,6 @@ def _find_causal_pathway(
         return path
     except (nx.NodeNotFound, nx.NetworkXNoPath):
         return []
-
-
-def _compute_adjustment_set(
-    G: nx.DiGraph, treatment: str, outcome: str,
-) -> list[str]:
-    """Compute a valid backdoor adjustment set.
-
-    The backdoor criterion (Pearl, 2000): Z satisfies the
-    backdoor criterion relative to (X, Y) if:
-    1. No node in Z is a descendant of X
-    2. Z d-separates X from Y given Z in the mutilated graph
-       (with arrows into X removed)
-
-    We use NetworkX's ``d_separated()`` when available and
-    fall back to a topological heuristic.
-    """
-    if not G.has_node(treatment) or not G.has_node(outcome):
-        return []
-
-    try:
-        descendants = nx.descendants(G, treatment)
-    except nx.NetworkXError:
-        descendants = set()
-
-    # Candidate confounders: predecessors of treatment that are
-    # NOT descendants of treatment and not the outcome itself.
-    try:
-        treatment_parents = set(G.predecessors(treatment))
-    except nx.NetworkXError:
-        treatment_parents = set()
-
-    candidates = [
-        n for n in treatment_parents
-        if n not in descendants and n != outcome
-    ]
-
-    # Verify d-separation when possible
-    valid_adjustment: list[str] = []
-    for node in candidates:
-        z = frozenset({node})
-        try:
-            if nx.d_separated(G, {treatment}, {outcome}, z):
-                # This node alone blocks a confounding path
-                valid_adjustment.append(node)
-            else:
-                # Still include — it blocks *some* paths
-                valid_adjustment.append(node)
-        except Exception:
-            # d_separated may fail on cyclic graphs; include anyway
-            valid_adjustment.append(node)
-
-    return valid_adjustment[:10]  # Cap for tractability
 
 
 def _estimate_causal_effect(

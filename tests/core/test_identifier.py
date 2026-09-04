@@ -17,7 +17,6 @@ from neorx.core.causal.identifier import (
     identify_causal_targets,
     _find_disease_node,
     _find_causal_pathway,
-    _compute_adjustment_set,
     _sensitivity_analysis,
     _compute_causal_confidence,
     _classify_target,
@@ -89,15 +88,6 @@ class TestFindDiseasePath:
         # CCR5 should have a path to the disease
         path = _find_causal_pathway(hiv_networkx, "gene:CCR5", disease_node)
         assert len(path) > 0
-
-
-class TestAdjustmentSet:
-    """Test backdoor adjustment set computation."""
-
-    def test_returns_list(self, hiv_networkx):
-        disease_node = _find_disease_node(hiv_networkx, "HIV")
-        adj_set = _compute_adjustment_set(hiv_networkx, "gene:CCR5", disease_node)
-        assert isinstance(adj_set, list)
 
 
 class TestSensitivityAnalysis:
@@ -185,3 +175,35 @@ class TestClassifyTarget:
             druggability=0.3,
         )
         assert classification == TargetClassification.INCONCLUSIVE
+
+
+class TestIdentificationIsReported:
+    """The verdict, not an assumption.
+
+    Identifiability used to be `len(causal_pathway) > 0` -- the existence
+    of any path -- while the adjustment set was computed and discarded.
+    These tests pin the replacement.
+    """
+
+    def test_result_carries_the_identification_reason(self, hiv_graph):
+        from neorx.core.causal.backdoor import IdentificationReason
+
+        targets = identify_causal_targets(hiv_graph, top_n=5)
+        assert targets
+        valid = {r.value for r in IdentificationReason}
+        for t in targets:
+            assert t.identification_reason in valid
+
+    def test_non_identifiable_targets_have_an_empty_adjustment_set(self, hiv_graph):
+        targets = identify_causal_targets(hiv_graph, top_n=10)
+        for t in targets:
+            if not t.identifiable:
+                assert t.adjustment_set == []
+
+    def test_identifiability_no_longer_tracks_mere_path_existence(self, hiv_graph):
+        # A literature-only graph has paths in the full graph but none in
+        # the causal subgraph, so nothing may be identifiable.
+        targets = identify_causal_targets(hiv_graph, top_n=10)
+        for t in targets:
+            if t.identification_reason == "no_causal_path":
+                assert not t.identifiable

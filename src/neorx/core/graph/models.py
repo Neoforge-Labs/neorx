@@ -216,7 +216,33 @@ class NeoRxResult(BaseModel):
     # Causal analysis results
     causal_effect: float = Field(0.0, description="Estimated causal effect size")
     causal_confidence: float = Field(0.0, description="Combined confidence 0-1", ge=0.0, le=1.0)
-    adjustment_set: list[str] = Field(default_factory=list, description="Variables adjusted for (backdoor)")
+    identifiable: bool = Field(
+        False,
+        description="Whether the backdoor criterion is satisfied for this target",
+    )
+    identification_reason: str = Field(
+        "",
+        description=(
+            "Why identification succeeded or failed -- an "
+            "IdentificationReason value. See neorx.core.causal.backdoor."
+        ),
+    )
+    adjustment_set: list[str] = Field(
+        default_factory=list,
+        description="Variables that must be adjusted for (backdoor); empty when not identifiable or trivially identifiable",
+    )
+    n_near_miss_confounders: int = Field(
+        0,
+        description=(
+            "For a trivially identifiable target: how many nodes regulate it "
+            "and have some non-admissible association with the disease. A "
+            "sensitivity measure on knowledge-graph incompleteness."
+        ),
+    )
+    adjustment_search_truncated: bool = Field(
+        False,
+        description="Whether the adjustment-set search hit its size or pool bound",
+    )
     causal_pathway: list[str] = Field(default_factory=list, description="Path from target to disease")
     robustness_score: float = Field(0.0, description="Sensitivity analysis robustness 0-1", ge=0.0, le=1.0)
     druggability_score: float = Field(0.0, description="Predicted druggability 0-1", ge=0.0, le=1.0)
