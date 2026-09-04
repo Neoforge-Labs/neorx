@@ -52,3 +52,108 @@ def test_sign_rejects_values_outside_minus_one_to_one():
             source_id="gene:A", target_id="disease:test",
             edge_type=EdgeType.ASSOCIATED_WITH, sign=2,
         )
+
+
+import networkx as nx
+from neorx.core.causal.graph_semantics import (
+    acyclic_core,
+    causal_subgraph,
+    cyclic_components,
+    is_causal_admissible,
+)
+
+
+def test_regulatory_gene_gene_edge_is_admissible():
+    assert is_causal_admissible(
+        {"edge_type": "activates", "evidence_class": "regulatory"}
+    )
+
+
+def test_gene_disease_edge_is_admissible_only_with_genetic_evidence():
+    genetic = {"edge_type": "associated_with",
+               "evidence_class": "genetic_association"}
+    somatic = {"edge_type": "associated_with",
+               "evidence_class": "somatic_mutation"}
+    literature = {"edge_type": "associated_with",
+                  "evidence_class": "literature"}
+    assert is_causal_admissible(genetic)
+    assert is_causal_admissible(somatic)
+    assert not is_causal_admissible(literature)
+
+
+def test_unclassified_association_is_not_admissible():
+    assert not is_causal_admissible(
+        {"edge_type": "associated_with", "evidence_class": ""}
+    )
+
+
+def test_string_interaction_is_never_admissible():
+    # STRING data is undirected; its arrow direction is an artefact of
+    # which protein landed in the first response column.
+    assert not is_causal_admissible(
+        {"edge_type": "interacts_with", "evidence_class": "regulatory"}
+    )
+
+
+def test_pathway_membership_is_never_admissible():
+    assert not is_causal_admissible(
+        {"edge_type": "participates_in", "evidence_class": ""}
+    )
+
+
+def test_causal_subgraph_keeps_admissible_edges_and_drops_the_rest():
+    G = nx.DiGraph()
+    G.add_edge("gene:U", "gene:X", edge_type="activates",
+               evidence_class="regulatory")
+    G.add_edge("gene:X", "disease:d", edge_type="associated_with",
+               evidence_class="genetic_association")
+    G.add_edge("gene:P", "disease:d", edge_type="associated_with",
+               evidence_class="literature")
+    G.add_edge("gene:X", "pathway:1", edge_type="participates_in",
+               evidence_class="")
+
+    sub = causal_subgraph(G)
+
+    assert set(sub.edges()) == {("gene:U", "gene:X"), ("gene:X", "disease:d")}
+    assert "pathway:1" not in sub
+    assert "gene:P" not in sub
+
+
+def test_causal_subgraph_preserves_edge_attributes():
+    G = nx.DiGraph()
+    G.add_edge("gene:U", "gene:X", edge_type="inhibits",
+               evidence_class="regulatory", sign=-1,
+               primary_sources=["SIGNOR"], weight=0.8)
+    sub = causal_subgraph(G)
+    assert sub.edges["gene:U", "gene:X"]["sign"] == -1
+    assert sub.edges["gene:U", "gene:X"]["primary_sources"] == ["SIGNOR"]
+
+
+def test_cyclic_components_reports_only_nontrivial_sccs():
+    G = nx.DiGraph()
+    G.add_edge("a", "b")
+    G.add_edge("b", "a")
+    G.add_edge("b", "c")
+    assert cyclic_components(G) == [frozenset({"a", "b"})]
+
+
+def test_acyclic_core_removes_cyclic_nodes_and_names_them():
+    G = nx.DiGraph()
+    G.add_edge("a", "b")
+    G.add_edge("b", "a")
+    G.add_edge("b", "c")
+    G.add_edge("c", "d")
+
+    core = acyclic_core(G)
+
+    assert core.excluded == frozenset({"a", "b"})
+    assert nx.is_directed_acyclic_graph(core.dag)
+    assert set(core.dag.nodes()) == {"c", "d"}
+
+
+def test_acyclic_core_of_a_dag_excludes_nothing():
+    G = nx.DiGraph()
+    G.add_edge("a", "b")
+    core = acyclic_core(G)
+    assert core.excluded == frozenset()
+    assert set(core.dag.nodes()) == {"a", "b"}
