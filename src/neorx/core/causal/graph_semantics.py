@@ -88,12 +88,18 @@ def causal_subgraph(G: nx.DiGraph) -> nx.DiGraph:
 
 
 def cyclic_components(G: nx.DiGraph) -> list[frozenset[str]]:
-    """Strongly connected components of more than one node."""
-    return [
-        frozenset(component)
-        for component in nx.strongly_connected_components(G)
-        if len(component) > 1
-    ]
+    """Strongly connected components with cycles, including self-loops."""
+    cyclic = []
+    for component in nx.strongly_connected_components(G):
+        # Non-trivial SCC (more than one node)
+        if len(component) > 1:
+            cyclic.append(frozenset(component))
+        # Single node with self-loop
+        elif len(component) == 1:
+            node = next(iter(component))
+            if G.has_edge(node, node):
+                cyclic.append(frozenset(component))
+    return cyclic
 
 
 @dataclass(frozen=True)
@@ -111,7 +117,7 @@ class AcyclicCore:
 
 
 def acyclic_core(G: nx.DiGraph) -> AcyclicCore:
-    """Remove every node in a non-trivial strongly connected component.
+    """Remove every node in a strongly connected component with cycles.
 
     Biological regulatory networks are full of feedback, and
     ``nx.is_d_separator`` requires a DAG of the whole graph -- not merely

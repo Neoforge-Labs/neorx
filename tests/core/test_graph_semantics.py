@@ -157,3 +157,76 @@ def test_acyclic_core_of_a_dag_excludes_nothing():
     core = acyclic_core(G)
     assert core.excluded == frozenset()
     assert set(core.dag.nodes()) == {"a", "b"}
+
+
+def test_self_loop_node_is_reported_as_cyclic():
+    """A self-loop node should be detected as cyclic."""
+    G = nx.DiGraph()
+    G.add_edge("a", "a", edge_type="activates", evidence_class="regulatory")
+    G.add_edge("a", "b", edge_type="activates", evidence_class="regulatory")
+
+    cyclic = cyclic_components(G)
+    assert cyclic == [frozenset({"a"})]
+
+
+def test_acyclic_core_excludes_self_loop_node_and_returns_dag():
+    """A self-loop node should be excluded and result in a valid DAG."""
+    G = nx.DiGraph()
+    G.add_edge("a", "a", edge_type="activates", evidence_class="regulatory")
+    G.add_edge("a", "b", edge_type="activates", evidence_class="regulatory")
+
+    core = acyclic_core(G)
+
+    assert core.excluded == frozenset({"a"})
+    assert nx.is_directed_acyclic_graph(core.dag)
+    assert set(core.dag.nodes()) == {"b"}
+    assert list(core.dag.edges()) == []
+
+
+def test_empty_graph_through_acyclic_core():
+    """An empty graph should behave sanely through acyclic_core."""
+    G = nx.DiGraph()
+
+    core = acyclic_core(G)
+
+    assert core.excluded == frozenset()
+    assert nx.is_directed_acyclic_graph(core.dag)
+    assert len(core.dag) == 0
+
+
+def test_empty_graph_through_causal_subgraph():
+    """An empty graph should behave sanely through causal_subgraph."""
+    G = nx.DiGraph()
+
+    sub = causal_subgraph(G)
+
+    assert len(sub) == 0
+    assert list(sub.edges()) == []
+
+
+def test_graph_with_no_admissible_edges_through_causal_subgraph():
+    """A graph with only non-admissible edges should filter to empty."""
+    G = nx.DiGraph()
+    G.add_edge("gene:X", "pathway:1", edge_type="participates_in",
+               evidence_class="")
+    G.add_edge("protein:Y", "protein:Z", edge_type="interacts_with",
+               evidence_class="")
+
+    sub = causal_subgraph(G)
+
+    assert len(sub) == 0
+    assert list(sub.edges()) == []
+
+
+def test_graph_with_no_admissible_edges_through_acyclic_core():
+    """A graph with only non-admissible edges should be empty after filtering."""
+    G = nx.DiGraph()
+    G.add_edge("gene:X", "pathway:1", edge_type="participates_in",
+               evidence_class="")
+
+    sub = causal_subgraph(G)
+    core = acyclic_core(sub)
+
+    assert core.excluded == frozenset()
+    assert nx.is_directed_acyclic_graph(core.dag)
+    assert len(core.dag) == 0
