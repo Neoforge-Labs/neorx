@@ -21,9 +21,19 @@ installed version is 3.6.1, so every call raises `AttributeError`. At
 `_compute_adjustment_set` the `if`, the `else`, and the `except` all append the
 candidate node, so the three branches are identical and the test is decorative.
 
-**The test is the wrong one anyway.** The backdoor criterion requires
-d-separation in the mutilated graph *G*<sub>X̄</sub>, with edges into the
-treatment removed. The code tests d-separation in *G*.
+**The test is the wrong one anyway.** The backdoor criterion asks whether Z
+blocks every path between X and Y that contains an arrow *into* X. Operationally
+that is d-separation of X and Y by Z in *G*<sub>X̲</sub> — G with the edges
+*leaving* X deleted, so that only backdoor paths remain. The code tests
+d-separation in plain *G*, where the causal path X → Y is still present and
+keeps the pair connected regardless of what Z blocks.
+
+(An earlier draft of this spec said *G*<sub>X̄</sub>, edges *into* X removed.
+That is the interventional graph behind the do-operator's truncated
+factorization, not the blocking condition — and deleting the arrows into X
+leaves the causal path intact, so the criterion would have been unsatisfiable
+almost everywhere. Corrected during implementation; the two mutilations must
+not be confused.)
 
 **The graph cannot support the criterion regardless.** Every edge points away
 from genes:
@@ -181,12 +191,18 @@ interaction inflates the factor twice.
 
 New module `src/neorx/core/causal/backdoor.py`:
 
-- `mutilated_graph(G, X) -> nx.DiGraph` — G with edges *into* X removed
 - `satisfies_backdoor(G, X, Y, Z) -> bool` — no z ∈ Z is a descendant of X, and
-  Z d-separates X from Y in *G*<sub>X̄</sub>, via `nx.is_d_separator`
+  Z d-separates X from Y in *G*<sub>X̲</sub> (edges *leaving* X deleted), via
+  `nx.is_d_separator`
 - `find_adjustment_set(G, X, Y) -> Identification` — searches candidate
   non-descendants of X by increasing set size and returns the minimal valid
   set, or a negative verdict naming the reason
+
+`treatment_absent` and `outcome_absent` mean the node is absent from the
+**input graph** — a typo or a stale identifier. A node that exists but carries
+no causal-admissible edge is dropped from the causal subgraph and reported as
+`no_causal_path`, because the honest complaint there is about the evidence, not
+about the query.
 
 `Identification` is a frozen dataclass:
 
