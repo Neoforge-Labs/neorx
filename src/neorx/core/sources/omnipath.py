@@ -19,6 +19,15 @@ an interaction STRING already reported.
 Endpoint: ``GET https://omnipathdb.org/interactions``. Note that the
 ``resources=`` filter returns an empty list for values that
 ``datasets=omnipath`` covers; use ``datasets``.
+
+Filtering by gene: use ``partners=<comma-separated symbols>``, not
+``genes=``. ``genes=`` returns HTTP 200 with a body that decodes as a
+list, but each element is itself a list rather than an interaction
+record -- it is not a usable filter and must not be used. ``partners=``
+returns every interaction touching *any* of the named genes (a gene's
+whole neighbourhood, not just edges within the set); the caller narrows
+that down by keeping only interactions whose source and target are both
+in the requested set -- see ``_interactions_to_edges``.
 """
 
 from __future__ import annotations
@@ -123,7 +132,7 @@ def query_omnipath(
                 "datasets": "omnipath",
                 "fields": "sources,references",
                 "format": "json",
-                "genes": ",".join(sorted(known)),
+                "partners": ",".join(sorted(known)),
             },
             timeout=TIMEOUT,
         )

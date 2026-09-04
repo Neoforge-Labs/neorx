@@ -7,6 +7,8 @@ with a consensus direction may become arrows -- an undirected or
 direction-disputed interaction carries no causal claim.
 """
 
+import pytest
+
 from neorx.core.graph.models import EdgeType
 from neorx.core.sources.omnipath import _interactions_to_edges
 
@@ -96,3 +98,14 @@ def test_self_loops_are_dropped():
 
 def test_missing_gene_symbols_are_dropped_rather_than_guessed():
     assert _interactions_to_edges([_row(source_genesymbol="")], {"A", "B"}) == []
+
+
+def test_a_malformed_row_that_is_a_list_raises_rather_than_being_absorbed():
+    # Pins the failure mode of the ``genes=`` query parameter bug (R7):
+    # that parameter returns HTTP 200 with a JSON body that is a list of
+    # lists rather than a list of interaction dicts. ``_interactions_to_edges``
+    # must not silently swallow a malformed row -- a response shaped
+    # nothing like an interaction record should fail loudly, not be
+    # coerced into an empty result.
+    with pytest.raises(AttributeError):
+        _interactions_to_edges([["A", "B", "not", "a", "dict"]], {"A", "B"})
