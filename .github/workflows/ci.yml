@@ -147,8 +147,15 @@ jobs:
           python-version: "3.12"
       # dev tooling lives in [dependency-groups].dev (PEP 735), not a
       # `[project.optional-dependencies]` extra -- ".[dev]" is not a valid
-      # extra on this project and would fail.
-      - run: pip install -e . ruff mypy pytest pytest-cov pytest-timeout
+      # extra on this project and would fail. Install the group itself
+      # rather than hand-listing its members: a hand-written list silently
+      # drifts the moment a dev dependency is added, which is exactly how
+      # vcrpy went missing here and broke collection of 8 test modules
+      # while the test matrix (which runs `uv sync --group dev`) stayed
+      # green. --system because this job deliberately has no venv, so
+      # check_floors.sh can drive `uv pip install` against the runner
+      # interpreter.
+      - run: uv pip install --system -e . --group dev
 
       # ---------------------------------------------------------------
       # HARD GATE: ruff + mypy over paths this branch owns and has
