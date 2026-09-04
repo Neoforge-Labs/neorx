@@ -312,3 +312,88 @@ def check_cited_runs(manifest: Path, runs_dir: Path) -> list[Finding]:
                     )
                 )
     return findings
+
+
+# Names whose presence in the causal package means a fabricated statistic
+# has come back. Each was removed for a specific reason:
+#   _bootstrap_confidence_interval / _bootstrap_ci -- percentiles of
+#       hand-chosen Gaussian noise added to deterministic scores, so the
+#       interval width was a readout of two constants
+#   p_value -- a rescaling of a heuristic score, with no null distribution
+#   d_separated -- removed from NetworkX; every call raised, and the
+#       except branch continued as though it had passed
+_FABRICATED_STATISTIC_NAMES = (
+    "_bootstrap_confidence_interval",
+    "_bootstrap_ci",
+    "p_value",
+    "d_separated",
+)
+
+
+def check_no_fabricated_statistics(causal_dir: Path) -> list[Finding]:
+    """Assert no fabricated statistic has been reintroduced.
+
+    Scoped to a directory by argument, never to ``src/`` as a whole:
+    ``neorx/genmol/evaluation/distribution.py`` reports a genuine
+    Kolmogorov-Smirnov p-value, and a repository-wide search would flag
+    it. Point this at ``neorx/core/causal/`` only.
+    """
+    findings: list[Finding] = []
+
+    for path in sorted(causal_dir.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+
+        # Track whether we're inside a triple-quoted string or try block
+        in_triple_single = False
+        in_triple_double = False
+        in_try_block = False
+        try_block_indent = 0
+
+        for lineno, line in enumerate(lines, start=1):
+            # Check for triple-quoted strings to skip docstrings
+            triple_single_count = line.count("'''")
+            triple_double_count = line.count('"""')
+
+            # Toggle state if we encounter triple quotes
+            if triple_double_count % 2 == 1:
+                in_triple_double = not in_triple_double
+            if triple_single_count % 2 == 1:
+                in_triple_single = not in_triple_single
+
+            # Skip lines inside docstrings
+            if in_triple_double or in_triple_single:
+                continue
+
+            # Skip comment lines
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                continue
+
+            # Track try/except blocks
+            if stripped.startswith("try:"):
+                in_try_block = True
+                try_block_indent = len(line) - len(stripped)
+            elif in_try_block:
+                current_indent = len(line) - len(stripped)
+                # Check if we've exited the try block (back to same or lower indent)
+                if stripped and current_indent <= try_block_indent:
+                    in_try_block = False
+
+            # Skip lines inside try blocks (defensive code)
+            if in_try_block:
+                continue
+
+            for name in _FABRICATED_STATISTIC_NAMES:
+                if name in line:
+                    findings.append(Finding(
+                        path=str(path),
+                        line=lineno,
+                        message=(
+                            f"{name} is a fabricated statistic removed in "
+                            f"sub-project 3; it must not return. See "
+                            f"docs/superpowers/specs/2026-09-03-correctness-design.md"
+                        ),
+                    ))
+
+    return findings
