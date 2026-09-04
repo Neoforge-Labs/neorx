@@ -80,8 +80,7 @@ def summarise_identification(results) -> dict:
     trivial_near_misses = [
         r.n_near_miss_confounders
         for r in results
-        if r.identification_reason
-        == IdentificationReason.IDENTIFIABLE_TRIVIALLY.value
+        if r.identification_reason == IdentificationReason.IDENTIFIABLE_TRIVIALLY.value
     ]
 
     return {
@@ -92,8 +91,7 @@ def summarise_identification(results) -> dict:
         "trivial_identifiability_rate": (n_trivially / n) if n else 0.0,
         "cyclic_fraction": (n_cyclic / n) if n else 0.0,
         "mean_near_miss_confounders": (
-            sum(trivial_near_misses) / len(trivial_near_misses)
-            if trivial_near_misses else 0.0
+            sum(trivial_near_misses) / len(trivial_near_misses) if trivial_near_misses else 0.0
         ),
         "reason_counts": counts,
     }
