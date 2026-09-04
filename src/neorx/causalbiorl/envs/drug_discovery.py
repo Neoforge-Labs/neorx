@@ -55,6 +55,7 @@ import numpy as np
 from gymnasium import spaces
 from numpy.typing import NDArray
 
+from neorx.causalbiorl.envs.generation import decode_latent_batch
 from neorx.genmol import load_pretrained
 
 logger = logging.getLogger(__name__)
@@ -348,6 +349,90 @@ class DrugDiscoveryEnv(gym.Env):
         info["objectives"] = obj_scores
 
         return obs, reward, terminated, truncated, info
+
+    def evaluate_actions(
+        self,
+        state: NDArray[np.floating],
+        actions: NDArray[np.floating],
+    ) -> NDArray[np.float64]:
+        """Score candidate actions against real chemistry, mutating nothing.
+
+        A planner needs to know what an action is actually worth before
+        committing to it. ``step`` cannot answer that: it advances the
+        step counter, updates per-target bests, drifts ``z_base``, and
+        records into the reward learner's history. This decodes and
+        screens the same molecules ``step`` would and returns their
+        rewards, leaving the environment exactly as it found it.
+
+        ``_screen_molecule`` draws from ``self.np_random`` to add
+        per-difficulty noise to the objective scores. That draw advances
+        the environment's shared random stream -- a real mutation, even
+        though it touches no counter or cache. Left alone, evaluating a
+        candidate here would desynchronise the noise a later ``step()``
+        draws for the same action from what it would have drawn
+        otherwise. The RNG state is saved before screening and restored
+        after, so this method's random consumption is invisible to the
+        rest of the environment.
+
+        ``step`` also bumps the chosen target's ``n_attempts`` *before*
+        building the observation it scores the reward against, so that
+        counter is baked into the state the reward learner sees. To
+        agree with ``step`` this replicates the same bump on a copy of
+        ``state`` while scoring each candidate, and never writes it back
+        to the target.
+
+        Parameters
+        ----------
+        state
+            The observation the rewards are computed against.
+        actions
+            Array of shape ``(n, action_dim)``.
+
+        Returns
+        -------
+        ndarray of shape ``(n,)``
+        """
+        if actions.ndim != 2:
+            raise ValueError(
+                f"evaluate_actions expects a 2-D action array, got shape {actions.shape}"
+            )
+
+        if self._genmol_model is None:
+            self._init_genmol()
+
+        clipped = np.clip(actions, self.action_space.low, self.action_space.high)
+
+        target_indices = [self._select_target(float(a[0])) for a in clipped]
+        latents = np.stack([
+            self._targets[idx].z_base
+            + clipped[i, 2: 2 + self.latent_dim].astype(np.float32) * 0.3
+            for i, idx in enumerate(target_indices)
+        ])
+
+        smiles = decode_latent_batch(
+            self._genmol_model, self._genmol_tokenizer, latents,
+        )
+
+        target_block_offset = GRAPH_EMBEDDING_DIM + MOL_FEATURE_DIM
+
+        rng_state = self.np_random.bit_generator.state
+        rewards = np.empty(len(clipped), dtype=np.float64)
+        for i, (mol, idx) in enumerate(zip(smiles, target_indices)):
+            obj_scores = self._screen_molecule(mol, self._targets[idx])
+
+            target = self._targets[idx]
+            state_for_reward = state.copy()
+            block_start = target_block_offset + idx * TARGET_FEATURE_DIM
+            target.n_attempts += 1
+            state_for_reward[block_start: block_start + TARGET_FEATURE_DIM] = (
+                target.summary_features()
+            )
+            target.n_attempts -= 1
+
+            rewards[i] = self._score_reward(state_for_reward, obj_scores)
+        self.np_random.bit_generator.state = rng_state
+
+        return rewards
 
     # ------------------------------------------------------------------ #
     #  Causal Interface (shared with toy envs)                             #
@@ -729,6 +814,31 @@ class DrugDiscoveryEnv(gym.Env):
 
         except Exception:
             # Fallback: equal-weight sum
+            return sum(obj_scores.values()) / max(len(obj_scores), 1)
+
+    def _score_reward(
+        self,
+        state: NDArray[np.floating],
+        obj_scores: dict[str, float],
+    ) -> float:
+        """The reward for these objective scores, recording nothing.
+
+        Mirrors ``_compute_reward`` exactly apart from the two mutations
+        it performs -- the learner's weight/objective history and the
+        critic update. A planner scoring a batch must not write hundreds
+        of phantom history entries or train the critic on candidates it
+        never takes.
+        """
+        try:
+            if self._reward_learner is None:
+                from neorx.causalbiorl.causal.reward_learner import AdaptiveRewardLearner
+                self._reward_learner = AdaptiveRewardLearner(
+                    state_dim=OBS_DIM,
+                )
+            return self._reward_learner.score(state, obj_scores)
+        except Exception:
+            # Fallback: equal-weight sum. Mirrors _compute_reward's own
+            # fallback so evaluate_actions and step agree on every path.
             return sum(obj_scores.values()) / max(len(obj_scores), 1)
 
     # ------------------------------------------------------------------ #
