@@ -123,6 +123,29 @@ class GraphEdge(BaseModel):
     source_db: str = Field("", description="Database this edge came from")
     evidence: Optional[str] = Field(None, description="Supporting evidence text")
     pmids: list[str] = Field(default_factory=list, description="PubMed IDs supporting this edge")
+    evidence_class: str = Field(
+        "",
+        description=(
+            "What kind of evidence backs this edge: genetic_association, "
+            "somatic_mutation, literature, regulatory, or empty if unclassified. "
+            "Causal admissibility is derived from this plus edge_type -- see "
+            "neorx.core.causal.graph_semantics."
+        ),
+    )
+    sign: int = Field(
+        0,
+        description="+1 stimulation, -1 inhibition, 0 unknown or unsigned",
+        ge=-1, le=1,
+    )
+    primary_sources: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Primary databases asserting this interaction. An aggregator such "
+            "as OmniPath records the databases it drew from here, so multi-source "
+            "corroboration counts distinct primary evidence rather than distinct "
+            "aggregators."
+        ),
+    )
 
 
 class DiseaseGraph(BaseModel):

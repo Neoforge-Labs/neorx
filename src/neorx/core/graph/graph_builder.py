@@ -316,6 +316,9 @@ def disease_graph_to_networkx(graph: DiseaseGraph) -> nx.DiGraph:
             weight=edge.weight,
             source_db=edge.source_db,
             evidence=edge.evidence or "",
+            evidence_class=edge.evidence_class,
+            sign=edge.sign,
+            primary_sources=list(edge.primary_sources),
         )
 
     return G
