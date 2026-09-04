@@ -112,6 +112,37 @@ def identify_causal_targets(
     -------
     list[NeoRxResult]
         Ranked list of causal target assessments, best first.
+
+    See Also
+    --------
+    evaluate_all_targets
+        The unfiltered evaluation of every candidate, before ranking.
+        Any statistic *about the evaluation* -- an identifiability rate,
+        a failure breakdown -- must be computed over that list. This
+        one is ranked by ``causal_confidence``, which itself rewards
+        identifiability, so a rate measured over it is measured on a
+        sample the rate selected.
+    """
+    return rank_causal_targets(
+        evaluate_all_targets(graph),
+        top_n=top_n,
+        min_causal_confidence=min_causal_confidence,
+    )
+
+
+def evaluate_all_targets(graph: DiseaseGraph) -> list[NeoRxResult]:
+    """Evaluate every candidate target in the graph, filtering nothing.
+
+    This is the population ``identify_causal_targets`` then ranks and
+    truncates. It is what any statistic describing the identification
+    procedure has to be computed over: how often the backdoor criterion
+    succeeded, why it failed when it did, how many candidates there
+    were. Measuring those over the returned top-N instead would measure
+    them on a sample selected partly *by* identifiability, since
+    ``compute_causal_confidence`` awards a bonus for it.
+
+    Returns the results sorted by ``causal_confidence`` descending --
+    ordering only; nothing is dropped.
     """
     G = disease_graph_to_networkx(graph)
     disease_node_id = _find_disease_node(G, graph.disease_name)
@@ -159,6 +190,21 @@ def identify_causal_targets(
     # Sort by causal_confidence descending
     results.sort(key=lambda r: r.causal_confidence, reverse=True)
 
+    return results
+
+
+def rank_causal_targets(
+    results: list[NeoRxResult],
+    top_n: int = 10,
+    min_causal_confidence: float = 0.3,
+) -> list[NeoRxResult]:
+    """Filter and rank evaluated targets down to the reported top-N.
+
+    Split out of ``identify_causal_targets`` so the full evaluated list
+    stays reachable: the ranking below is confidence-ordered, and
+    confidence rewards identifiability, so the survivors are not a
+    representative sample of what was evaluated.
+    """
     # Split human and pathogen results to prevent pathogen targets
     # from completely crowding out human targets.  Each pool gets
     # at least half the slots (with leftover going to whichever

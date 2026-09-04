@@ -89,9 +89,17 @@ def test_a_disease_absent_from_ground_truth_raises_instead_of_fabricating(monkey
         "neorx.core.graph.graph_builder.build_disease_graph",
         lambda disease, use_cache=False: _FakeGraph(),
     )
+    # ``_evaluate_disease`` evaluates every candidate and ranks that list
+    # separately, so the identification summary can be computed over the
+    # full population rather than the reported slice. Both halves are
+    # stubbed here; neither is exercised before the raise under test.
     monkeypatch.setattr(
-        "neorx.core.causal.identifier.identify_causal_targets",
-        lambda graph, top_n=20: [_FakeTarget()],
+        "neorx.core.causal.identifier.evaluate_all_targets",
+        lambda graph: [_FakeTarget()],
+    )
+    monkeypatch.setattr(
+        "neorx.core.causal.identifier.rank_causal_targets",
+        lambda results, top_n=20: list(results),
     )
 
     with pytest.raises(mod.UnvalidatableDiseaseError, match="not-a-real-disease"):
@@ -282,3 +290,106 @@ def test_every_reason_appears_in_the_breakdown_even_at_zero():
     assert set(summary["reason_counts"]) == {
         r.value for r in IdentificationReason
     }
+
+
+# ── The summary's population ───────────────────────────────────────
+#
+# The rate has to be computed over every candidate the identifier
+# evaluated, not over the top-N it reports. Ranking is by
+# ``causal_confidence``, whose formula adds a bonus for being
+# identifiable, so the reported slice is a sample selected partly by the
+# very property being measured -- the rate over it is inflated by
+# construction, and its failure breakdown cannot sum to the number of
+# candidates evaluated.
+
+
+def _synthetic_disease_graph(n_candidates: int):
+    """A disease graph with a known number of candidate targets.
+
+    Built by hand rather than through ``build_disease_graph`` so the
+    candidate count is exact and the test needs no network.
+    """
+    from neorx.core.graph.models import (
+        DiseaseGraph,
+        EdgeType,
+        GraphEdge,
+        GraphNode,
+        NodeType,
+    )
+
+    disease_id = "MONDO:0000001"
+    nodes = [
+        GraphNode(
+            node_id=disease_id,
+            name="testdisease",
+            node_type=NodeType.DISEASE,
+            source="test",
+            score=1.0,
+        )
+    ]
+    edges = []
+    for i in range(n_candidates):
+        node_id = f"GENE:G{i:02d}"
+        nodes.append(
+            GraphNode(
+                node_id=node_id,
+                name=f"G{i:02d}",
+                node_type=NodeType.GENE,
+                source="test",
+                score=0.5,
+            )
+        )
+        edges.append(
+            GraphEdge(
+                source_id=node_id,
+                target_id=disease_id,
+                edge_type=EdgeType.ASSOCIATED_WITH,
+                weight=0.6,
+                source_db="test",
+            )
+        )
+
+    return DiseaseGraph(
+        disease_name="testdisease",
+        disease_id=disease_id,
+        nodes=nodes,
+        edges=edges,
+        sources_queried=["test"],
+    )
+
+
+def test_summary_covers_every_evaluated_candidate_not_the_reported_top_n():
+    from experiments.neorx_7disease import TOP_N, summarise_identification
+    from neorx.core.causal.identifier import (
+        evaluate_all_targets,
+        identify_causal_targets,
+        rank_causal_targets,
+    )
+
+    n_candidates = TOP_N + 5
+    graph = _synthetic_disease_graph(n_candidates)
+
+    evaluations = evaluate_all_targets(graph)
+    targets = rank_causal_targets(evaluations, top_n=TOP_N)
+
+    # The seam exists and both sides are what they claim to be: every
+    # candidate evaluated, and strictly fewer reported.
+    assert len(evaluations) == n_candidates
+    assert len(targets) == TOP_N < len(evaluations)
+
+    # ``identify_causal_targets`` still returns exactly what it did --
+    # the full list was added alongside it, not in place of it.
+    assert [r.protein_id for r in identify_causal_targets(graph, top_n=TOP_N)] == [
+        r.protein_id for r in targets
+    ]
+
+    summary = summarise_identification(evaluations)
+
+    assert summary["n_candidates"] == len(evaluations)
+    assert summary["n_candidates"] > TOP_N
+    # Success criterion 10: the breakdown accounts for every candidate.
+    assert sum(summary["reason_counts"].values()) == summary["n_candidates"]
+
+    # And the top-N slice would have given a different, smaller
+    # population -- which is why the experiment must not pass it.
+    assert summarise_identification(targets)["n_candidates"] == TOP_N
