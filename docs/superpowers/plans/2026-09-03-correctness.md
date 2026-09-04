@@ -636,21 +636,17 @@ def test_absent_treatment_and_outcome_are_named_separately():
     )
 
 
-def test_unblockable_backdoor_path_reports_no_valid_adjustment_set():
-    # X <- U -> D where U itself is a descendant of X: adjusting for U is
-    # forbidden, and nothing else blocks the path.
+def test_self_loop_is_a_cyclic_component():
+    # A gene regulating itself -- autoregulation, common in OmniPath -- is
+    # the purest cycle there is. It is its own strongly connected component
+    # of size one, so a naive len(component) > 1 filter misses it entirely
+    # and hands d-separation a graph that is not a DAG.
     G = nx.DiGraph()
-    G.add_edge("X", "U", **REG)
-    G.add_edge("U", "X2", **REG)
-    G.add_edge("X2", "X", **REG)
-    G.add_edge("U", "D", **GEN)
+    G.add_edge("X", "X", **REG)
     G.add_edge("X", "D", **GEN)
     result = find_adjustment_set(G, "X", "D")
     assert not result.identifiable
-    assert result.reason in {
-        IdentificationReason.NO_VALID_ADJUSTMENT_SET,
-        IdentificationReason.CYCLIC_COMPONENT,
-    }
+    assert result.reason is IdentificationReason.CYCLIC_COMPONENT
 
 
 def test_search_truncation_is_reported_not_hidden():
@@ -662,9 +658,9 @@ def test_search_truncation_is_reported_not_hidden():
         G.add_edge(f"U{i}", "X", **REG)
         G.add_edge(f"U{i}", "D", **GEN)
     result = find_adjustment_set(G, "X", "D")
-    if not result.identifiable:
-        assert result.reason is IdentificationReason.NO_VALID_ADJUSTMENT_SET
-        assert result.search_truncated
+    assert not result.identifiable
+    assert result.reason is IdentificationReason.NO_VALID_ADJUSTMENT_SET
+    assert result.search_truncated
 
 
 def test_confounding_sensitivity_counts_near_miss_confounders():
@@ -1948,7 +1944,10 @@ import neorx
 
 MAX_LINES = 600
 
-_PACKAGES = ("core/causal", "causalbiorl/envs")
+# Task 12 appends "causalbiorl/envs" to this tuple. It is not listed here
+# because drug_discovery.py is 884 lines until Task 12 splits it, and a task
+# must never commit a red suite.
+_PACKAGES = ("core/causal",)
 
 
 def _modules() -> list[Path]:
@@ -2872,10 +2871,19 @@ git commit -m "feat: confirm CEM elites against real chemistry and record the ex
   helpers are pure functions of a molecule and a target.
   `neorx.core.pipeline` keeps every name it exports today.
 
-- [ ] **Step 1: Run the size test to see the current failures**
+- [ ] **Step 1: Extend the size test to cover the environments package**
+
+Task 9 created `tests/core/test_module_sizes.py` covering `core/causal` only,
+because `drug_discovery.py` could not pass the ceiling until this task. Extend
+its tuple and delete the now-stale comment above it:
+
+```python
+_PACKAGES = ("core/causal", "causalbiorl/envs")
+```
 
 Run: `.venv/bin/python -m pytest tests/core/test_module_sizes.py -v`
-Expected: FAIL for `drug_discovery.py` (884 lines).
+Expected: FAIL for `drug_discovery.py` (884 lines). That failure is this
+task's target.
 
 - [ ] **Step 2: Create `screening.py`**
 
