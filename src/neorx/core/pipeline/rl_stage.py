@@ -70,9 +70,15 @@ def generate_candidates_with_rl(
     agent.train()
 
     # Extract best molecules from env's internal tracking. Each target
-    # state records the per-objective scores _screen_molecule produced
-    # for its best molecule -- pass those through rather than the
-    # placeholders that used to stand in for them.
+    # state records the raw measurements _screen_molecule took for its
+    # best molecule -- binding in kcal/mol, SA on the 1-10 scale, QED in
+    # [0, 1], exactly the units score_candidate documents. Pass those
+    # through rather than the placeholders that used to stand in for
+    # them, and rather than best_objectives, whose values are already
+    # normalised to [0, 1]: feeding those back through score_candidate's
+    # own normalisation would re-normalise an already-normalised number.
+    # A measurement that was never taken is None, which score_candidate
+    # reads as "unmeasured" -- never a number asserting a result.
     all_candidates: list[ScoredCandidate] = []
     for ts in env._targets:
         if ts.best_smiles is not None and ts.best_score > 0.0:
@@ -84,9 +90,9 @@ def generate_candidates_with_rl(
                 if ts.target_idx < len(causal_only) else "",
                 causal_confidence=causal_only[ts.target_idx].causal_confidence
                 if ts.target_idx < len(causal_only) else 0.5,
-                binding_affinity=ts.best_objectives.get("binding", 0.0) * -10.0,
-                qed_score=ts.best_objectives.get("qed", 0.0),
-                sa_score=ts.best_objectives.get("sa", 0.0),
+                binding_affinity=ts.best_measurements.get("binding"),
+                qed_score=ts.best_measurements.get("qed"),
+                sa_score=ts.best_measurements.get("sa"),
             )
             all_candidates.append(candidate)
 

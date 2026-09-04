@@ -263,7 +263,7 @@ class DrugDiscoveryEnv(gym.Env):
         smiles = self._decode_latent(z)
 
         # ── Screen molecule ───────────────────────────────────
-        obj_scores = self._screen_molecule(smiles, target)
+        obj_scores, measurements = self._screen_molecule(smiles, target)
 
         # ── Compute reward ────────────────────────────────────
         state_vec = self._build_observation()
@@ -275,6 +275,7 @@ class DrugDiscoveryEnv(gym.Env):
             target.best_score = composite
             target.best_smiles = smiles
             target.best_objectives = dict(obj_scores)
+            target.best_measurements = dict(measurements)
 
         if composite > self._episode_best_score:
             self._episode_best_score = composite
@@ -379,7 +380,7 @@ class DrugDiscoveryEnv(gym.Env):
         rng_state = self.np_random.bit_generator.state
         rewards = np.empty(len(clipped), dtype=np.float64)
         for i, (mol, idx) in enumerate(zip(smiles, target_indices)):
-            obj_scores = self._screen_molecule(mol, self._targets[idx])
+            obj_scores, _ = self._screen_molecule(mol, self._targets[idx])
 
             target = self._targets[idx]
             state_for_reward = state.copy()
@@ -466,28 +467,48 @@ class DrugDiscoveryEnv(gym.Env):
         self,
         smiles: str,
         target: _TargetState,
-    ) -> dict[str, float]:
-        """Screen a molecule and return per-objective scores in [0, 1].
+    ) -> tuple[dict[str, float], dict[str, float | None]]:
+        """Screen a molecule; return its normalised scores and raw measurements.
 
         Thin orchestration over ``screening.py``'s pure scoring functions:
         owns the surrogate's lazy construction and the per-difficulty noise
         draw (which consumes ``self.np_random`` -- a real mutation).
+
+        The first element is the per-objective scores in [0, 1] that the
+        reward and the observation consume. The second is the same
+        molecule's raw measurements in their own units -- binding in
+        kcal/mol, SA on the 1-10 scale, QED in [0, 1] -- with None for
+        anything that could not be measured. The measurements carry no
+        noise and no neutral-prior substitution, so a reporter can publish
+        them as the measurements they are.
         """
         if self.use_surrogate and self._surrogate is None:
             try:
                 from neorx.causalbiorl.causal.surrogate_docker import SurrogateDockingModel
                 self._surrogate = SurrogateDockingModel()
             except Exception:
-                pass  # screening.score_binding treats a missing surrogate as a failed lookup
+                pass  # screening.measure_binding treats a missing surrogate as a failed lookup
 
-        scores: dict[str, float] = {
-            "binding": screening.score_binding(
+        from neorx.causalbiorl.causal.reward_learner import (
+            normalise_binding,
+            normalise_sa,
+        )
+
+        measurements: dict[str, float | None] = {
+            "binding": screening.measure_binding(
                 smiles, target,
                 use_surrogate=self.use_surrogate,
                 surrogate=self._surrogate,
             ),
-            "qed": screening.score_qed(smiles),
-            "sa": screening.score_synthetic_accessibility(smiles),
+            "qed": screening.measure_qed(smiles),
+            "sa": screening.measure_synthetic_accessibility(smiles),
+        }
+
+        qed = measurements["qed"]
+        scores: dict[str, float] = {
+            "binding": normalise_binding(measurements["binding"]),
+            "qed": 0.5 if qed is None else qed,
+            "sa": normalise_sa(measurements["sa"]),
             "novelty": screening.score_novelty(smiles),
             "causal": target.causal_confidence,
             "stability": screening.score_stability(smiles, target),
@@ -501,7 +522,7 @@ class DrugDiscoveryEnv(gym.Env):
                     0.0, 1.0,
                 ))
 
-        return scores
+        return scores, measurements
 
     def _recalibrate_surrogate(self) -> None:
         """Run real docking on recent molecules to recalibrate the surrogate."""

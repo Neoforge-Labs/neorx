@@ -43,7 +43,17 @@ class _TargetState:
         # Best molecule found for this target
         self.best_smiles: str = ""
         self.best_score: float = -np.inf
+        # Normalised per-objective scores in [0, 1], as the reward and the
+        # observation consume them.
         self.best_objectives: dict[str, float] = {}
+        # The same molecule's raw measurements, in their own units --
+        # binding in kcal/mol, SA on the 1-10 scale, QED in [0, 1]. A None
+        # entry means the quantity was not measured. Kept alongside
+        # ``best_objectives`` because the normalisations are lossy: they
+        # substitute a neutral prior for a missing measurement and clamp
+        # out-of-range values, so a reporter that inverted them would
+        # publish numbers no measurement supports.
+        self.best_measurements: dict[str, float | None] = {}
 
         # Running z-vector for latent space navigation
         self.z_base: NDArray[np.floating] = np.random.randn(LATENT_DIM).astype(np.float32) * 0.5

@@ -641,17 +641,24 @@ class TestRLPipeline:
         fake agent whose `train()` is a no-op. That still exercises the real
         `generate_candidates_with_rl` code -- the attribute it reads
         (`_targets`) and the values it hands to `score_candidate`
-        (`ts.best_objectives[...]`) are pinned for real, without paying for a
-        real training loop.
+        (`ts.best_measurements[...]`) are pinned for real, without paying for
+        a real training loop.
         """
         import neorx.causalbiorl.agents.causal_agent as agent_module
         import neorx.causalbiorl.envs.drug_discovery as dd_module
+        from neorx.causalbiorl.causal.reward_learner import normalise_binding
         from neorx.core.pipeline.rl_stage import generate_candidates_with_rl
+        from neorx.core.scoring.scorer import _get_weights
 
         # Exactly what a real DrugDiscoveryEnv's `_targets` looks like once
         # training has found a molecule for one target: a best SMILES, a
-        # composite best_score, and the per-objective scores
-        # `_screen_molecule` measured for it.
+        # composite best_score, the normalised per-objective scores the
+        # reward consumed, and the raw measurements `_screen_molecule` took
+        # for that molecule. The two differ by the normalisations in
+        # `reward_learner`: binding -8.52 kcal/mol normalises to 0.71,
+        # SA 3.57 normalises to 0.7144...; the noise the env adds to the
+        # scores never touches the measurements, which is why 0.71 here is
+        # not exactly -8.52/-12.
         winning_target = SimpleNamespace(
             target_idx=0,
             best_smiles="CCO",
@@ -663,6 +670,11 @@ class TestRLPipeline:
                 "novelty": 0.55,
                 "causal": 0.9,
                 "stability": 0.4,
+            },
+            best_measurements={
+                "binding": -8.52,
+                "qed": 0.83,
+                "sa": 3.57,
             },
         )
 
@@ -709,18 +721,104 @@ class TestRLPipeline:
         assert len(candidates) == 1
         candidate = candidates[0]
 
-        # The scores came from what the environment actually measured...
+        # The scores came from what the environment actually measured, in
+        # the units `score_candidate` documents: SA on the 1-10 scale and
+        # binding in kcal/mol -- the raw measurements, not the normalised
+        # objective scores.
         assert candidate.qed_score == pytest.approx(
-            winning_target.best_objectives["qed"]
+            winning_target.best_measurements["qed"]
         )
         assert candidate.sa_score == pytest.approx(
-            winning_target.best_objectives["sa"]
+            winning_target.best_measurements["sa"]
         )
         assert candidate.binding_affinity == pytest.approx(
-            winning_target.best_objectives["binding"] * -10.0
+            winning_target.best_measurements["binding"]
         )
 
         # ...and specifically not the old hardcoded placeholders (0.5, 5.0)
         # that stood in for them before this fix, regardless of what the
         # environment measured.
         assert not (candidate.qed_score == 0.5 and candidate.sa_score == 5.0)
+
+        # Nor the normalised objective scores fed through in place of the
+        # measurements: an SA of 0.27 is below the scale's 1.0 minimum, and
+        # re-normalising it saturates the SA dimension at its ceiling.
+        assert candidate.sa_score != pytest.approx(
+            winning_target.best_objectives["sa"]
+        )
+        assert candidate.score_breakdown["sa"] < _get_weights()["sa"]
+
+        # Nor a binding affinity reconstructed with a hand-copied constant:
+        # the forward normalisation's divisor is 12.0, not 10.0.
+        assert candidate.binding_affinity != pytest.approx(
+            winning_target.best_objectives["binding"] * -10.0
+        )
+        assert normalise_binding(candidate.binding_affinity) == pytest.approx(
+            winning_target.best_objectives["binding"], abs=1e-3
+        )
+
+    def test_rl_stage_reports_unmeasured_quantities_as_unmeasured(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A missing measurement reaches `score_candidate` as None.
+
+        The environment records None for a quantity it could not measure --
+        no surrogate, no PDB to dock against, a failed SA computation. The
+        RL stage must pass that absence through: `score_candidate` reads
+        None as "unmeasured" and applies its own neutral prior, whereas a
+        numeric stand-in (the `.get("binding", 0.0)` this replaced, which
+        published `-0.0 kcal/mol`) asserts a docking result that was never
+        obtained.
+        """
+        import neorx.causalbiorl.agents.causal_agent as agent_module
+        import neorx.causalbiorl.envs.drug_discovery as dd_module
+        from neorx.core.pipeline.rl_stage import generate_candidates_with_rl
+
+        unmeasured_target = SimpleNamespace(
+            target_idx=0,
+            best_smiles="CCO",
+            best_score=0.4,
+            best_objectives={"binding": 0.3, "qed": 0.5, "sa": 0.5},
+            best_measurements={"binding": None, "qed": None, "sa": None},
+        )
+
+        class FakeEnv:
+            def __init__(self, **kwargs) -> None:
+                self._targets = [unmeasured_target]
+
+        class FakeAgent:
+            def __init__(self, env, cfg) -> None:
+                pass
+
+            def init_hierarchical_planner(self, **kwargs) -> None:
+                pass
+
+            def train(self) -> None:
+                pass
+
+        monkeypatch.setattr(dd_module, "DrugDiscoveryEnv", FakeEnv)
+        monkeypatch.setattr(agent_module, "CausalAgent", FakeAgent)
+
+        candidates = generate_candidates_with_rl(
+            "TestDisease",
+            nx_graph=None,
+            causal_only=[
+                SimpleNamespace(
+                    gene_name="GENE1",
+                    protein_id="P1",
+                    protein_name="Protein1",
+                    causal_confidence=0.8,
+                    pdb_ids=[],
+                ),
+            ],
+            n_episodes=1,
+            max_steps_per_episode=1,
+            latent_dim=8,
+            seed=0,
+        )
+
+        assert len(candidates) == 1
+        candidate = candidates[0]
+        assert candidate.binding_affinity is None
+        assert candidate.qed_score is None
+        assert candidate.sa_score is None

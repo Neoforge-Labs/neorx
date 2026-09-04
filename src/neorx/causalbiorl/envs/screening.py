@@ -25,14 +25,20 @@ if TYPE_CHECKING:
 _OBJECTIVE_ORDER = ("binding", "qed", "sa", "novelty", "causal", "stability")
 
 
-def score_binding(
+def measure_binding(
     smiles: str,
     target: _TargetState,
     *,
     use_surrogate: bool,
     surrogate: Any,
-) -> float:
-    """Binding affinity via surrogate or real docking, normalised to [0, 1].
+) -> float | None:
+    """Binding affinity in kcal/mol (negative = better), or None.
+
+    None means *not measured* -- no surrogate, no fingerprint, no PDB to
+    dock against, or a failed lookup. Callers that need a [0, 1] score
+    hand that None to ``normalise_binding``, which supplies the neutral
+    prior; callers that report the affinity itself must report the
+    absence, never a number standing in for one.
 
     ``surrogate`` must already be constructed when ``use_surrogate`` is
     True -- lazily creating and caching it is the environment's job, since
@@ -44,77 +50,77 @@ def score_binding(
     return _real_binding(smiles, target)
 
 
-def _surrogate_binding(smiles: str, target: _TargetState, surrogate: Any) -> float:
-    """Fast binding estimate via surrogate model.
+def _surrogate_binding(
+    smiles: str, target: _TargetState, surrogate: Any,
+) -> float | None:
+    """Fast binding estimate via surrogate model, in kcal/mol.
 
     ``surrogate`` is None when the caller's lazy construction failed --
-    the same neutral prior the original inline construction's ``except``
-    returned, without attempting a fingerprint lookup that could not be
-    scored anyway.
+    unmeasured, the same as a fingerprint that could not be built, and
+    without attempting a lookup that could not be scored anyway.
     """
     if surrogate is None:
-        return 0.3  # neutral prior
+        return None
 
     try:
         from neorx.causalbiorl.causal.surrogate_docker import smiles_to_fingerprint
-        from neorx.causalbiorl.causal.reward_learner import normalise_binding
 
         fp = smiles_to_fingerprint(smiles)
         if fp is None:
-            return 0.3
+            return None
 
-        affinity = surrogate.predict(fp, target.node_embedding)
-        return normalise_binding(affinity)
+        return float(surrogate.predict(fp, target.node_embedding))
 
     except Exception:
-        return 0.3  # neutral prior
+        return None
 
 
-def _real_binding(smiles: str, target: _TargetState) -> float:
-    """Real docking via DockBot (slow but accurate)."""
+def _real_binding(smiles: str, target: _TargetState) -> float | None:
+    """Real docking via DockBot (slow but accurate), in kcal/mol."""
     try:
         from neorx.core.pipeline import _run_docking
-        from neorx.causalbiorl.causal.reward_learner import normalise_binding
 
         if not target.pdb_ids:
-            return 0.3
+            return None
 
         affinity = _run_docking(smiles, target.pdb_ids[0])
-        if affinity is not None:
-            return normalise_binding(affinity)
-        return 0.3
+        return None if affinity is None else float(affinity)
 
     except Exception:
-        return 0.3
+        return None
 
 
-def score_qed(smiles: str) -> float:
-    """Get QED score."""
+def measure_qed(smiles: str) -> float | None:
+    """QED in [0, 1] (higher = more drug-like), or None if not computable."""
     try:
         from neorx.molscreen.accessibility import qed_score
         q = qed_score(smiles)
-        return float(q) if q is not None else 0.5
+        return None if q is None else float(q)
     except Exception:
         try:
             from rdkit import Chem
             from rdkit.Chem import QED
             mol = Chem.MolFromSmiles(smiles)
             if mol:
-                return QED.qed(mol)
+                return float(QED.qed(mol))
         except Exception:
             pass
-        return 0.5
+        return None
 
 
-def score_synthetic_accessibility(smiles: str) -> float:
-    """Get normalised SA score (higher = easier to synthesise)."""
+def measure_synthetic_accessibility(smiles: str) -> float | None:
+    """Raw SA score on the 1 (easy) to 10 (hard) scale, or None.
+
+    None means *not measured*; ``normalise_sa`` turns that into the
+    neutral prior, and reporters must report the absence rather than a
+    stand-in number.
+    """
     try:
         from neorx.molscreen.accessibility import sa_score
-        from neorx.causalbiorl.causal.reward_learner import normalise_sa
         sa = sa_score(smiles)
-        return normalise_sa(sa)
+        return None if sa is None else float(sa)
     except Exception:
-        return 0.5
+        return None
 
 
 def score_novelty(smiles: str) -> float:
@@ -168,15 +174,16 @@ def recalibrate_surrogate(targets: list, surrogate: Any) -> None:
         recal_count = 0
         for target in targets:
             if target.best_smiles and target.pdb_ids:
-                real_aff = score_binding(
+                real_aff = measure_binding(
                     target.best_smiles, target,
                     use_surrogate=False, surrogate=None,
                 )
+                if real_aff is None:
+                    continue  # docking failed -- nothing measured to fit to
                 fp = smiles_to_fingerprint(target.best_smiles)
                 if fp is not None:
-                    # Convert normalised score back to approx affinity
                     surrogate.add_observation(
-                        fp, target.node_embedding, -real_aff * 12.0,
+                        fp, target.node_embedding, real_aff,
                     )
                     recal_count += 1
 
