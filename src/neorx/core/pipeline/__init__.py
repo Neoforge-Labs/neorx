@@ -50,6 +50,7 @@ from neorx.core.graph.models import (
 )
 from neorx.core.graph.graph_builder import build_disease_graph
 from neorx.core.causal.identifier import identify_causal_targets
+from neorx.core.pipeline.rl_stage import generate_candidates_with_rl
 from neorx.core.scoring.scorer import score_candidate, rank_candidates
 
 logger = logging.getLogger(__name__)
@@ -774,67 +775,19 @@ def run_rl_pipeline(
         all_candidates: list[ScoredCandidate] = []
 
         try:
-            from neorx.causalbiorl.envs.drug_discovery import DrugDiscoveryEnv
-            from neorx.causalbiorl.agents.causal_agent import CausalAgent
-
             # Convert to the types DrugDiscoveryEnv expects
             from neorx.core.graph.graph_builder import disease_graph_to_networkx
             nx_graph = disease_graph_to_networkx(graph)
 
-            target_dicts = [
-                {
-                    "gene_name": t.gene_name,
-                    "protein_id": t.protein_id,
-                    "protein_name": t.protein_name,
-                    "pdb_ids": t.pdb_ids if t.pdb_ids else [],
-                    "causal_confidence": t.causal_confidence,
-                }
-                for t in causal_only
-            ]
-
-            env = DrugDiscoveryEnv(
-                disease=disease,
-                prebuilt_graph=nx_graph,
-                prebuilt_targets=target_dicts,
-                max_steps=max_steps_per_episode,
-                latent_dim=latent_dim,
-            )
-
-            # Build agent config
-            from neorx.causalbiorl.models import AgentConfig
-            agent_cfg = AgentConfig(
-                agent_type="causal",
+            all_candidates = generate_candidates_with_rl(
+                disease,
+                nx_graph,
+                causal_only,
                 n_episodes=n_episodes,
+                max_steps_per_episode=max_steps_per_episode,
+                latent_dim=latent_dim,
                 seed=seed,
             )
-
-            agent = CausalAgent(env, agent_cfg)
-            agent.init_hierarchical_planner(
-                n_targets=len(causal_only),
-                latent_dim=latent_dim,
-            )
-
-            # Train (the training loop collects molecules internally)
-            agent.train()
-
-            # Extract best molecules from env's internal tracking
-            for ts in env._target_states:
-                if ts.best_smiles is not None and ts.best_score > 0.0:
-                    candidate = score_candidate(
-                        smiles=ts.best_smiles,
-                        target_protein_id=causal_only[ts.target_idx].protein_id
-                        if ts.target_idx < len(causal_only) else "",
-                        target_protein_name=causal_only[ts.target_idx].protein_name
-                        if ts.target_idx < len(causal_only) else "",
-                        causal_confidence=causal_only[ts.target_idx].causal_confidence
-                        if ts.target_idx < len(causal_only) else 0.5,
-                        binding_affinity=ts.best_score * -10.0,
-                        qed_score=0.5,
-                        sa_score=5.0,
-                    )
-                    all_candidates.append(candidate)
-
-            logger.info("RL agent found %d candidate molecules.", len(all_candidates))
 
         except ImportError as e:
             logger.warning(

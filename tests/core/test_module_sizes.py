@@ -15,10 +15,7 @@ import neorx
 
 MAX_LINES = 600
 
-# Task 12 appends "causalbiorl/envs" to this tuple. It is not listed here
-# because drug_discovery.py is 884 lines until Task 12 splits it, and a task
-# must never commit a red suite.
-_PACKAGES = ("core/causal",)
+_PACKAGES = ("core/causal", "causalbiorl/envs")
 
 
 def _modules() -> list[Path]:
