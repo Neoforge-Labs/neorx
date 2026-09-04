@@ -498,7 +498,9 @@ git commit -m "feat: partition graph edges into causal-admissible and associatio
     `search_truncated: bool`, `n_near_miss_confounders: int`)
   - `mutilated_graph(G, treatment) -> nx.DiGraph`
   - `satisfies_backdoor(G, treatment, outcome, adjustment) -> bool`
-  - `find_adjustment_set(G, treatment, outcome, full_graph=None) -> Identification`
+  - `find_adjustment_set(G, treatment, outcome) -> Identification` — `G` is the
+    full disease graph; the function extracts the causal subgraph and its
+    acyclic core itself, so no caller can forget that step.
   - `confounding_sensitivity(dag, full_graph, treatment, outcome) -> int`
   - `MAX_ADJUSTMENT_SET_SIZE = 3`, `MAX_CANDIDATE_POOL = 20`
 
