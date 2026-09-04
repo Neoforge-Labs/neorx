@@ -28,9 +28,6 @@ knowledge graph:
    If ΔY is large and positive, inhibiting X reduces disease
    severity → target is genuinely causal.
 
-4. **Bootstrap confidence**: resample with noise 200 times to
-   compute 95% CI on ΔY.
-
 Integration
 -----------
 This module now delegates to CausalBioRL's ``StructuralCausalModel``
@@ -50,7 +47,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import networkx as nx
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +59,6 @@ class CounterfactualResult:
     factual_score: float = 0.0
     counterfactual_score: float = 0.0
     would_intervention_help: bool = False
-    confidence_interval: tuple[float, float] = (0.0, 0.0)
     reasoning: str = ""
 
 
@@ -77,13 +72,9 @@ class CounterfactualValidator:
 
     def __init__(
         self,
-        n_bootstrap: int = 200,
         effect_threshold: float = 0.1,
-        seed: int = 42,
     ) -> None:
-        self._n_bootstrap = n_bootstrap
         self._threshold = effect_threshold
-        self._rng = np.random.default_rng(seed)
 
     def validate(
         self,
@@ -126,9 +117,6 @@ class CounterfactualValidator:
         # ── Step 3: Counterfactual effect ───────────────────
         cf_effect = factual - counterfactual
 
-        # ── Step 4: Bootstrap CI ────────────────────────────
-        ci_lo, ci_hi = self._bootstrap_ci(G, target_id, disease_id)
-
         would_help = cf_effect > self._threshold
 
         # ── Reasoning ───────────────────────────────────────
@@ -137,15 +125,13 @@ class CounterfactualValidator:
                 f"Counterfactual analysis: inhibiting {gene} reduces "
                 f"disease score by {cf_effect:.3f} "
                 f"(factual={factual:.3f} → counterfactual="
-                f"{counterfactual:.3f}).  95% CI: "
-                f"[{ci_lo:.3f}, {ci_hi:.3f}].  "
+                f"{counterfactual:.3f}).  "
                 f"Intervention would likely reduce disease severity."
             )
         else:
             reasoning = (
                 f"Counterfactual analysis: inhibiting {gene} has "
                 f"minimal effect (ΔY={cf_effect:.3f}).  "
-                f"95% CI: [{ci_lo:.3f}, {ci_hi:.3f}].  "
                 f"This target may be correlational rather than causal."
             )
 
@@ -155,7 +141,6 @@ class CounterfactualValidator:
             factual_score=round(factual, 4),
             counterfactual_score=round(counterfactual, 4),
             would_intervention_help=would_help,
-            confidence_interval=(round(ci_lo, 4), round(ci_hi, 4)),
             reasoning=reasoning,
         )
 
@@ -278,35 +263,3 @@ class CounterfactualValidator:
                 values[node_id] = G.nodes[node_id].get("score", 0.5)
 
         return values.get(disease_id, 0.5)
-
-    def _bootstrap_ci(
-        self,
-        G: nx.DiGraph,
-        target_id: str,
-        disease_id: str,
-    ) -> tuple[float, float]:
-        """Bootstrap 95% CI on counterfactual effect."""
-        effects: list[float] = []
-
-        for _ in range(self._n_bootstrap):
-            # Create a noisy copy of the graph
-            G_noisy = G.copy()
-            for _, _, data in G_noisy.edges(data=True):
-                w = data.get("weight", 0.5)
-                noise = self._rng.normal(0, 0.05)
-                data["weight"] = max(0.01, min(1.0, w + noise))
-
-            for node_id, data in G_noisy.nodes(data=True):
-                s = data.get("score", 0.5)
-                noise = self._rng.normal(0, 0.03)
-                data["score"] = max(0.0, min(1.0, s + noise))
-
-            factual = self._propagate(G_noisy, disease_id, {})
-            counterfactual = self._propagate(
-                G_noisy, disease_id, {target_id: 0.0},
-            )
-            effects.append(factual - counterfactual)
-
-        lo = float(np.percentile(effects, 2.5))
-        hi = float(np.percentile(effects, 97.5))
-        return lo, hi

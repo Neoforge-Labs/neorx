@@ -142,7 +142,6 @@ class TestClassifyTarget:
         classification, reasoning = _classify_target(
             gene_name="CCR5",
             causal_confidence=0.8,
-            causal_effect=0.7,
             robustness=0.7,
             is_identifiable=True,
             n_pathways=3,
@@ -155,7 +154,6 @@ class TestClassifyTarget:
         classification, reasoning = _classify_target(
             gene_name="TNF",
             causal_confidence=0.2,
-            causal_effect=0.1,
             robustness=0.1,
             is_identifiable=False,
             n_pathways=1,
@@ -168,7 +166,6 @@ class TestClassifyTarget:
         classification, _ = _classify_target(
             gene_name="GENE_X",
             causal_confidence=0.5,
-            causal_effect=0.3,
             robustness=0.4,
             is_identifiable=True,
             n_pathways=1,

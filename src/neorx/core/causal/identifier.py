@@ -275,14 +275,14 @@ def _evaluate_target(
 
     # ── Step 2: Causal Effect Estimation ────────────────────────
 
-    causal_effect, causal_p_value = _estimate_causal_effect(
+    evidence_score = _estimate_evidence_score(
         G, target_id, disease_id, adjustment_set,
     )
 
     # ── Step 3: Sensitivity Analysis ────────────────────────────
 
     robustness = _sensitivity_analysis(
-        G, target_id, disease_id, causal_effect,
+        G, target_id, disease_id, evidence_score,
     )
 
     # ── Step 4: Topological Evidence ────────────────────────────
@@ -306,21 +306,7 @@ def _evaluate_target(
     # ── Step 5: Composite Causal Confidence ─────────────────────
 
     causal_confidence = _compute_causal_confidence(
-        effect=abs(causal_effect),
-        robustness=robustness,
-        is_identifiable=is_identifiable,
-        n_pathways=n_pathways,
-        n_interactions=n_interactions,
-        source_scores=source_scores,
-        druggability=druggability,
-        n_active_sources=n_active_sources,
-        n_associated_diseases=n_associated_diseases,
-    )
-
-    # ── Step 5b: Bootstrap Confidence Interval ──────────────────
-
-    ci_lo, ci_hi = _bootstrap_confidence_interval(
-        effect=abs(causal_effect),
+        effect=abs(evidence_score),
         robustness=robustness,
         is_identifiable=is_identifiable,
         n_pathways=n_pathways,
@@ -344,7 +330,6 @@ def _evaluate_target(
     classification, reasoning = _classify_target(
         gene_name=gene_name,
         causal_confidence=causal_confidence,
-        causal_effect=causal_effect,
         robustness=robustness,
         is_identifiable=is_identifiable,
         n_pathways=n_pathways,
@@ -360,9 +345,7 @@ def _evaluate_target(
         gene_name=gene_name,
         uniprot_id=node_data.get("uniprot_id", ""),
         pdb_ids=node_data.get("pdb_ids", []),
-        causal_effect=causal_effect,
         causal_confidence=causal_confidence,
-        confidence_interval=(ci_lo, ci_hi),
         adjustment_set=adjustment_set,
         identifiable=identification.identifiable,
         identification_reason=identification.reason.value,
@@ -505,23 +488,16 @@ def _evaluate_pathogen_target(
             f"(Phase {clinical_phase}, confidence {confidence:.2f})."
         )
 
-    # Bootstrap CI — simplified for pathogen targets
-    ci_width = 0.05 if clinical_phase >= 4 else 0.10 if clinical_phase >= 2 else 0.15
-    ci_lo = max(0.0, confidence - ci_width)
-    ci_hi = min(1.0, confidence + ci_width)
-
     return NeoRxResult(
         protein_id=target_id,
         protein_name=gene_name,
         gene_name=gene_name,
         uniprot_id=node_data.get("uniprot_id", ""),
         pdb_ids=node_data.get("pdb_ids", []),
-        causal_effect=drug_score,  # drug evidence IS the causal effect
         causal_confidence=confidence,
-        confidence_interval=(ci_lo, ci_hi),
         adjustment_set=[],
         identifiable=False,
-        identification_reason="treatment_absent",
+        identification_reason="no_causal_path",
         causal_pathway=causal_pathway,
         robustness_score=robustness,
         druggability_score=druggability,
@@ -626,12 +602,12 @@ def _find_causal_pathway(
         return []
 
 
-def _estimate_causal_effect(
+def _estimate_evidence_score(
     G: nx.DiGraph,
     treatment: str,
     outcome: str,
     adjustment_set: list[str],
-) -> tuple[float, float]:
+) -> float:
     """Estimate causal effect via multi-source evidence triangulation.
 
     Instead of fabricating synthetic data (which is scientifically
@@ -656,8 +632,10 @@ def _estimate_causal_effect(
 
     Returns
     -------
-    tuple[float, float]
-        (effect_estimate, p_value_proxy)
+    float
+        A weighted multi-source evidence score. This is not a causal
+        effect size: no interventional or patient-level data enters it.
+        It ranks candidates; it does not estimate a magnitude.
     """
     score = G.nodes[treatment].get("score", 0.0) if G.has_node(treatment) else 0.0
 
@@ -704,14 +682,11 @@ def _estimate_causal_effect(
             direct_causal = True
             break
 
-    effect = score * path_strength * dsep_factor * (1.0 + cent_score) * source_factor
+    evidence = score * path_strength * dsep_factor * (1.0 + cent_score) * source_factor
     if direct_causal:
-        effect *= 1.5
+        evidence *= 1.5
 
-    # p-value proxy (lower for stronger effects)
-    p_value = max(0.001, 0.5 * (1.0 - min(1.0, abs(effect))))
-
-    return effect, p_value
+    return evidence
 
 
 def _compute_path_strength(
@@ -988,7 +963,6 @@ def _compute_causal_confidence(
 def _classify_target(
     gene_name: str,
     causal_confidence: float,
-    causal_effect: float,
     robustness: float,
     is_identifiable: bool,
     n_pathways: int,
@@ -1178,68 +1152,3 @@ def _count_evidence_streams(
 
     return streams
 
-
-# ── Uncertainty Quantification ─────────────────────────────────────
-
-def _bootstrap_confidence_interval(
-    effect: float,
-    robustness: float,
-    is_identifiable: bool,
-    n_pathways: int,
-    n_interactions: int,
-    source_scores: dict[str, float],
-    druggability: float,
-    n_active_sources: int = 4,
-    n_associated_diseases: int = 0,
-    n_bootstrap: int = 200,
-    ci_level: float = 0.95,
-) -> tuple[float, float]:
-    """Compute bootstrap CI for causal confidence.
-
-    Resamples the input evidence components with perturbation
-    and recomputes causal confidence for each bootstrap sample
-    to estimate the sampling distribution.
-
-    Returns
-    -------
-    tuple[float, float]
-        (lower_bound, upper_bound) of the 95% CI.
-    """
-    seed = int(os.environ.get("NEORX_SEED", "42"))
-    rng = np.random.default_rng(seed)
-
-    bootstrap_confs: list[float] = []
-
-    for _ in range(n_bootstrap):
-        # Perturb each evidence component
-        b_effect = max(0.0, effect + rng.normal(0, 0.05))
-        b_robustness = max(0.0, min(1.0, robustness + rng.normal(0, 0.05)))
-        b_drug = max(0.0, min(1.0, druggability + rng.normal(0, 0.03)))
-
-        # Resample source scores (leave-one-out equivalent)
-        b_sources = dict(source_scores)
-        if b_sources and rng.random() < 0.3:
-            drop_key = rng.choice(list(b_sources.keys()))
-            b_sources = {k: v for k, v in b_sources.items() if k != drop_key}
-
-        b_pathways = max(0, n_pathways + int(rng.integers(-1, 2)))
-        b_interactions = max(0, n_interactions + int(rng.integers(-1, 2)))
-
-        conf = _compute_causal_confidence(
-            effect=b_effect,
-            robustness=b_robustness,
-            is_identifiable=is_identifiable,
-            n_pathways=b_pathways,
-            n_interactions=b_interactions,
-            source_scores=b_sources,
-            druggability=b_drug,
-            n_active_sources=n_active_sources,
-            n_associated_diseases=n_associated_diseases,
-        )
-        bootstrap_confs.append(conf)
-
-    alpha = (1.0 - ci_level) / 2.0
-    lo = float(np.percentile(bootstrap_confs, 100 * alpha))
-    hi = float(np.percentile(bootstrap_confs, 100 * (1 - alpha)))
-
-    return (round(lo, 4), round(hi, 4))

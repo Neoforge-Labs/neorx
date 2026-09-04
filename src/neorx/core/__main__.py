@@ -235,11 +235,10 @@ def identify(
 
     for t in targets:
         icon = "✓" if t.is_causal_target else "✗"
-        ci = t.confidence_interval
         typer.echo(
             f"  {icon} {t.gene_name:12s} "
             f"conf={t.causal_confidence:.3f} "
-            f"CI=[{ci[0]:.2f},{ci[1]:.2f}]  "
+            f"id={t.identification_reason:26s} "
             f"robust={t.robustness_score:.3f}  "
             f"drug={t.druggability_score:.3f}  "
             f"[{t.classification.value}]"

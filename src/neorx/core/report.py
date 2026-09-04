@@ -153,14 +153,14 @@ def _build_context(
                     "classification": t.classification.value,
                     "is_causal": t.is_causal_target,
                     "causal_confidence": t.causal_confidence,
-                    "causal_effect": t.causal_effect,
                     "robustness": t.robustness_score,
                     "druggability": t.druggability_score,
                     "reasoning": t.reasoning,
                     "n_pathways": t.n_supporting_pathways,
                     "n_interactions": t.n_protein_interactions,
                     "pdb_ids": t.pdb_ids[:3],
-                    "confidence_interval": t.confidence_interval,
+                    "identifiable": t.identifiable,
+                    "identification_reason": t.identification_reason,
                     "target_type": getattr(t, "target_type", ""),
                     "tissue_relevant": getattr(t, "tissue_relevant", True),
                     "tissue_explanation": getattr(t, "tissue_explanation", ""),
@@ -242,8 +242,7 @@ def _builtin_template(ctx: dict[str, Any]) -> str:
         tissue_icon = "✓" if t.get("tissue_relevant", True) else "✗"
         tissue_title = t.get("tissue_explanation", "")
 
-        ci = t.get("confidence_interval", (0.0, 1.0))
-        ci_str = f"[{ci[0]:.2f}, {ci[1]:.2f}]"
+        id_str = t.get("identification_reason", "—").replace("_", " ")
         targets_html += f"""
         <tr>
             <td><strong>{t["gene_name"]}</strong></td>
@@ -253,7 +252,7 @@ def _builtin_template(ctx: dict[str, Any]) -> str:
                 {badge}</span></td>
             <td>{tt_emoji} {tt_label}</td>
             <td>{t["causal_confidence"]:.3f}</td>
-            <td style="font-size:0.85em">{ci_str}</td>
+            <td style="font-size:0.85em">{id_str}</td>
             <td>{t["robustness"]:.3f}</td>
             <td title="{tissue_title}">{tissue_icon}</td>
             <td>{t.get("evidence_streams", 0)}</td>
@@ -357,7 +356,7 @@ def _builtin_template(ctx: dict[str, Any]) -> str:
     <table>
       <thead>
         <tr><th>Gene</th><th>Protein</th><th>Classification</th>
-            <th>Target Type</th><th>Causal Conf.</th><th>95% CI</th>
+            <th>Target Type</th><th>Causal Conf.</th><th>Identifiability</th>
             <th>Robustness</th><th>Tissue</th><th>Evidence</th></tr>
       </thead>
       <tbody>{targets_html}</tbody>

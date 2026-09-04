@@ -196,12 +196,12 @@ class NeoRxResult(BaseModel):
        The backdoor criterion checks if there is a valid set of
        variables to condition on that blocks all spurious paths.
 
-    2. **Effect estimation** — What is the magnitude of the
-       causal effect?  Larger effects = more promising targets.
+    2. **Evidence aggregation** — How much independent support does
+       this target have?  Reported as ``evidence_score``, not as a
+       causal effect size: no interventional data enters it.
 
-    3. **Sensitivity analysis** — Is the estimate robust to
-       unmeasured confounders?  If adding a random common cause
-       changes the estimate, the original finding was fragile.
+    3. **Sensitivity analysis** — Is the finding robust to removing
+       any single source?  Leave-one-source-out stability.
 
     4. **Classification** — Combine all evidence to label the
        protein as a genuine causal target or a correlational
@@ -214,7 +214,6 @@ class NeoRxResult(BaseModel):
     pdb_ids: list[str] = Field(default_factory=list, description="Known PDB structures")
 
     # Causal analysis results
-    causal_effect: float = Field(0.0, description="Estimated causal effect size")
     causal_confidence: float = Field(0.0, description="Combined confidence 0-1", ge=0.0, le=1.0)
     identifiable: bool = Field(
         False,
@@ -251,11 +250,6 @@ class NeoRxResult(BaseModel):
     classification: TargetClassification = Field(TargetClassification.INCONCLUSIVE)
     is_causal_target: bool = Field(False, description="Final: is this a genuine causal target?")
     reasoning: str = Field("", description="Human-readable causal reasoning explanation")
-
-    # Uncertainty quantification
-    confidence_interval: tuple[float, float] = Field(
-        (0.0, 1.0), description="95% bootstrap CI on causal_confidence",
-    )
 
     # Evidence
     source_scores: dict[str, float] = Field(default_factory=dict, description="Per-database evidence scores")
