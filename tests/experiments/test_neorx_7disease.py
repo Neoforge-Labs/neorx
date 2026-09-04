@@ -194,3 +194,91 @@ def test_every_row_carries_the_full_schema(tmp_path, monkeypatch):
     for row in rec.rows():
         assert required <= set(row), sorted(required - set(row))
     assert len(rec.rows()) == 7
+
+
+# ── Identifiability metrics ────────────────────────────────────────
+#
+# The non-trivial identifiability rate is what the rewritten manuscript
+# leads with, and the failure breakdown is what makes a low rate legible
+# rather than a bare zero. Both have to reach the run record.
+
+from neorx.core.causal.backdoor import IdentificationReason
+
+
+def test_identifiability_summary_counts_every_candidate():
+    from experiments.neorx_7disease import summarise_identification
+
+    class _R:
+        def __init__(self, reason, identifiable, near_miss=0):
+            self.identification_reason = reason
+            self.identifiable = identifiable
+            self.n_near_miss_confounders = near_miss
+
+    results = [
+        _R("identifiable_by_adjustment", True),
+        _R("identifiable_trivially", True, near_miss=3),
+        _R("no_causal_path", False),
+        _R("cyclic_component", False),
+    ]
+
+    summary = summarise_identification(results)
+
+    assert summary["n_candidates"] == 4
+    assert sum(summary["reason_counts"].values()) == 4
+    assert summary["n_identifiable_by_adjustment"] == 1
+    assert summary["n_identifiable_trivially"] == 1
+
+
+def test_nontrivial_rate_excludes_trivial_verdicts():
+    from experiments.neorx_7disease import summarise_identification
+
+    class _R:
+        def __init__(self, reason, identifiable):
+            self.identification_reason = reason
+            self.identifiable = identifiable
+            self.n_near_miss_confounders = 0
+
+    results = [
+        _R("identifiable_by_adjustment", True),
+        _R("identifiable_trivially", True),
+        _R("identifiable_trivially", True),
+        _R("no_causal_path", False),
+    ]
+
+    summary = summarise_identification(results)
+
+    assert summary["nontrivial_identifiability_rate"] == 0.25
+    assert summary["cyclic_fraction"] == 0.0
+
+
+def test_cyclic_fraction_is_reported():
+    from experiments.neorx_7disease import summarise_identification
+
+    class _R:
+        def __init__(self, reason):
+            self.identification_reason = reason
+            self.identifiable = False
+            self.n_near_miss_confounders = 0
+
+    summary = summarise_identification(
+        [_R("cyclic_component"), _R("cyclic_component"), _R("no_causal_path")]
+    )
+    assert summary["cyclic_fraction"] == pytest.approx(2 / 3)
+
+
+def test_summary_of_no_candidates_is_zero_not_a_division_error():
+    from experiments.neorx_7disease import summarise_identification
+
+    summary = summarise_identification([])
+    assert summary["n_candidates"] == 0
+    assert summary["nontrivial_identifiability_rate"] == 0.0
+    assert summary["cyclic_fraction"] == 0.0
+
+
+def test_every_reason_appears_in_the_breakdown_even_at_zero():
+    from experiments.neorx_7disease import summarise_identification
+
+    summary = summarise_identification([])
+    assert set(summary["reason_counts"]) == {
+        r.value for r in IdentificationReason
+    }
