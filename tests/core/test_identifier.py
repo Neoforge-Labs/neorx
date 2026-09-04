@@ -206,3 +206,38 @@ class TestIdentificationIsReported:
         for t in targets:
             if t.identification_reason == "no_causal_path":
                 assert not t.identifiable
+
+
+class TestCorroborationCountsPrimaryEvidence:
+    def test_an_aggregator_does_not_double_count_a_shared_interaction(self):
+        import networkx as nx
+        from neorx.core.causal.evidence import corroboration_factor
+
+        G = nx.DiGraph()
+        # STRING and OmniPath both report the same underlying interaction;
+        # OmniPath names STRING among its primary sources.
+        G.add_edge("gene:A", "gene:B", source_db="STRING",
+                   primary_sources=["STRING"])
+        G.add_edge("gene:A", "gene:C", source_db="OmniPath",
+                   primary_sources=["STRING"])
+
+        # One distinct primary source, not two aggregators.
+        assert corroboration_factor(G, "gene:A") == 1.1
+
+    def test_distinct_primary_sources_each_count(self):
+        import networkx as nx
+        from neorx.core.causal.evidence import corroboration_factor
+
+        G = nx.DiGraph()
+        G.add_edge("gene:A", "gene:B", source_db="OmniPath",
+                   primary_sources=["SIGNOR", "TRRUST"])
+        assert corroboration_factor(G, "gene:A") == pytest.approx(1.2)
+
+    def test_an_edge_without_primary_sources_falls_back_to_its_database(self):
+        import networkx as nx
+        from neorx.core.causal.evidence import corroboration_factor
+
+        G = nx.DiGraph()
+        G.add_edge("gene:A", "disease:d", source_db="Monarch",
+                   primary_sources=[])
+        assert corroboration_factor(G, "gene:A") == pytest.approx(1.1)

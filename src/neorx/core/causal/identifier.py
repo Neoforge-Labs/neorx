@@ -76,6 +76,7 @@ from neorx.core.causal.backdoor import find_adjustment_set
 from neorx.core.causal.evidence import (
     collect_source_scores,
     compute_path_strength,
+    corroboration_factor,
     count_evidence_streams,
     count_pathway_connections,
     count_protein_interactions,
@@ -467,16 +468,7 @@ def _estimate_evidence_score(
         cent_score = 0.0
 
     # 4. Multi-source corroboration
-    source_dbs = set()
-    for _, _, edata in G.edges(treatment, data=True):
-        src = edata.get("source_db", "")
-        if src:
-            source_dbs.add(src)
-    for _, _, edata in G.in_edges(treatment, data=True):
-        src = edata.get("source_db", "")
-        if src:
-            source_dbs.add(src)
-    source_factor = min(1.5, 1.0 + len(source_dbs) * 0.1)
+    source_factor = corroboration_factor(G, treatment)
 
     # Direct causal edge bonus
     direct_causal = False

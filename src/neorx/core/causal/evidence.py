@@ -143,3 +143,25 @@ def compute_path_strength(
         return strength
     except (nx.NodeNotFound, nx.NetworkXNoPath):
         return 0.1  # Minimal baseline
+
+
+def corroboration_factor(G: nx.DiGraph, node: str) -> float:
+    """Multi-source corroboration, counted over primary evidence.
+
+    An aggregator is not a source. OmniPath re-reports interactions
+    STRING also reports, so counting ``source_db`` values would let one
+    curated interaction inflate the factor twice. Where an edge names its
+    ``primary_sources``, those are counted instead of the aggregator.
+    """
+    primary: set[str] = set()
+
+    for _, _, attrs in list(G.edges(node, data=True)) + list(
+        G.in_edges(node, data=True)
+    ):
+        named = attrs.get("primary_sources") or []
+        if named:
+            primary.update(named)
+        elif attrs.get("source_db"):
+            primary.add(attrs["source_db"])
+
+    return min(1.5, 1.0 + len(primary) * 0.1)
