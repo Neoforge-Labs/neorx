@@ -9,6 +9,8 @@ Covers the four new integration files:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 import networkx as nx
@@ -613,3 +615,112 @@ class TestRLPipeline:
         )
         assert result is not None
         assert result.disease == "TestDisease"
+
+    def test_rl_stage_extraction_uses_measured_objectives_not_placeholders(
+        self, monkeypatch,
+    ) -> None:
+        """Pins `generate_candidates_with_rl`'s candidate-extraction loop.
+
+        `test_rl_pipeline_with_prebuilt_graph` above exercises `run_rl_pipeline`
+        end to end but never asserts on `result.scored_candidates` -- so it
+        stayed green through the entire period the RL stage silently returned
+        zero candidates on every invocation (the loop read the nonexistent
+        `env._target_states` instead of `env._targets`, raising AttributeError,
+        caught by a broad `except Exception` and logged away). It would also
+        pass unchanged if the qed/sa/binding_affinity fix were reverted to the
+        old hardcoded placeholders, since it checks nothing about candidate
+        content.
+
+        Running the real pipeline far enough to get a genuine candidate needs
+        the shipped GenMol checkpoint (`latent_dim` must be 128, the model's
+        actual latent width) and takes minutes even for one episode -- too
+        slow for a unit test. Instead this stubs `DrugDiscoveryEnv` and
+        `CausalAgent` (the two names `generate_candidates_with_rl` imports at
+        call time) with fakes: a fake env whose `_targets` list is populated
+        exactly the way a real env's would be after training finishes, and a
+        fake agent whose `train()` is a no-op. That still exercises the real
+        `generate_candidates_with_rl` code -- the attribute it reads
+        (`_targets`) and the values it hands to `score_candidate`
+        (`ts.best_objectives[...]`) are pinned for real, without paying for a
+        real training loop.
+        """
+        import neorx.causalbiorl.agents.causal_agent as agent_module
+        import neorx.causalbiorl.envs.drug_discovery as dd_module
+        from neorx.core.pipeline.rl_stage import generate_candidates_with_rl
+
+        # Exactly what a real DrugDiscoveryEnv's `_targets` looks like once
+        # training has found a molecule for one target: a best SMILES, a
+        # composite best_score, and the per-objective scores
+        # `_screen_molecule` measured for it.
+        winning_target = SimpleNamespace(
+            target_idx=0,
+            best_smiles="CCO",
+            best_score=0.62,
+            best_objectives={
+                "binding": 0.71,
+                "qed": 0.83,
+                "sa": 0.27,
+                "novelty": 0.55,
+                "causal": 0.9,
+                "stability": 0.4,
+            },
+        )
+
+        class FakeEnv:
+            def __init__(self, **kwargs) -> None:
+                self._targets = [winning_target]
+
+        class FakeAgent:
+            def __init__(self, env, cfg) -> None:
+                self.env = env
+                self.cfg = cfg
+
+            def init_hierarchical_planner(self, **kwargs) -> None:
+                pass
+
+            def train(self) -> None:
+                pass  # a real agent would populate env._targets; already done above
+
+        monkeypatch.setattr(dd_module, "DrugDiscoveryEnv", FakeEnv)
+        monkeypatch.setattr(agent_module, "CausalAgent", FakeAgent)
+
+        causal_only = [
+            SimpleNamespace(
+                gene_name="GENE1",
+                protein_id="P1",
+                protein_name="Protein1",
+                causal_confidence=0.8,
+                pdb_ids=[],
+            ),
+        ]
+
+        candidates = generate_candidates_with_rl(
+            "TestDisease",
+            nx_graph=None,  # unused by FakeEnv
+            causal_only=causal_only,
+            n_episodes=1,
+            max_steps_per_episode=1,
+            latent_dim=8,
+            seed=0,
+        )
+
+        # The loop ran at all -- reading env._targets (not the nonexistent
+        # env._target_states) without raising.
+        assert len(candidates) == 1
+        candidate = candidates[0]
+
+        # The scores came from what the environment actually measured...
+        assert candidate.qed_score == pytest.approx(
+            winning_target.best_objectives["qed"]
+        )
+        assert candidate.sa_score == pytest.approx(
+            winning_target.best_objectives["sa"]
+        )
+        assert candidate.binding_affinity == pytest.approx(
+            winning_target.best_objectives["binding"] * -10.0
+        )
+
+        # ...and specifically not the old hardcoded placeholders (0.5, 5.0)
+        # that stood in for them before this fix, regardless of what the
+        # environment measured.
+        assert not (candidate.qed_score == 0.5 and candidate.sa_score == 5.0)
