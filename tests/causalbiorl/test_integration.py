@@ -480,7 +480,9 @@ class TestHierarchicalPlanner:
     def test_plan_returns_valid_action(self) -> None:
         from neorx.causalbiorl.causal.planner import HierarchicalPlanner
 
-        planner = HierarchicalPlanner(n_targets=3, latent_dim=16)
+        planner = HierarchicalPlanner(
+            reward_fn=lambda s, a: float(np.sum(a)), n_targets=3, latent_dim=16,
+        )
         rng = np.random.default_rng(42)
 
         state = np.random.randn(64).astype(np.float32)
@@ -493,7 +495,9 @@ class TestHierarchicalPlanner:
     def test_ucb_explores_all_targets(self) -> None:
         from neorx.causalbiorl.causal.planner import HierarchicalPlanner
 
-        planner = HierarchicalPlanner(n_targets=4, latent_dim=8)
+        planner = HierarchicalPlanner(
+            reward_fn=lambda s, a: float(np.sum(a)), n_targets=4, latent_dim=8,
+        )
         rng = np.random.default_rng(42)
         state = np.zeros(32, dtype=np.float32)
         target_embs = np.zeros((4, 16), dtype=np.float32)

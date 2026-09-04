@@ -355,6 +355,7 @@ class CausalAgent:
         self._hierarchical_planner = HierarchicalPlanner(
             scm=self._scm,
             reward_fn=self._reward_fn,
+            evaluate_actions=getattr(self.env, "evaluate_actions", None),
             n_targets=n_targets,
             latent_dim=latent_dim,
         )

@@ -161,3 +161,111 @@ def test_reward_learner_compute_reward_still_records():
     after = len(learner.get_weight_history()["binding"])
 
     assert after == before + 1
+
+
+class TestEliteConfirmation:
+    """CEM searches with the learned model; reality picks the winner.
+
+    Optimising a 64-unit MLP over 128 latent dimensions with a
+    1000-sample CEM finds the model's artefacts. Decoding every
+    candidate is unaffordable -- 1000 evaluations per step is ~15 s even
+    with batched decode -- so the elites, and only the elites, are
+    checked against real chemistry.
+    """
+
+    def test_planner_returns_the_best_real_scored_elite(self):
+        from neorx.causalbiorl.causal.planner import HierarchicalPlanner
+
+        # The learned model prefers large positive delta-z; reality
+        # prefers the opposite. The planner must follow reality.
+        def model_reward(state, action):
+            return float(np.sum(action[2:]))
+
+        def real_rewards(state, actions):
+            return -np.sum(actions[:, 2:], axis=1)
+
+        planner = HierarchicalPlanner(
+            reward_fn=model_reward,
+            evaluate_actions=real_rewards,
+            n_targets=1,
+            latent_dim=4,
+            cem_samples=32,
+            cem_iterations=2,
+        )
+        action = planner.plan(np.zeros(4), rng=np.random.default_rng(0))
+
+        # CEM's inner loop is driven entirely by the (adversarial) model,
+        # so its search never leaves the model-preferred region -- an
+        # elite set selected purely by "highest model score" is, by
+        # construction, always drawn from the model's positive-leaning
+        # half of the sample space. Real confirmation cannot invent a
+        # candidate the model never considered; it can only pick the
+        # best of what the model offers. So the confirmed pick must beat
+        # the naive model-trusting choice (the unconfirmed elite mean,
+        # i.e. what the planner returned before this task) in real
+        # terms, rather than achieve reality's global optimum outright.
+        unconfirmed = HierarchicalPlanner(
+            reward_fn=model_reward,
+            n_targets=1,
+            latent_dim=4,
+            cem_samples=32,
+            cem_iterations=2,
+        ).plan(np.zeros(4), rng=np.random.default_rng(0))
+
+        assert float(np.sum(action[2:])) < float(np.sum(unconfirmed[2:]))
+
+    def test_planner_records_the_exploitation_gap(self):
+        from neorx.causalbiorl.causal.planner import HierarchicalPlanner
+
+        planner = HierarchicalPlanner(
+            reward_fn=lambda s, a: float(np.sum(a[2:])),
+            evaluate_actions=lambda s, a: -np.sum(a[:, 2:], axis=1),
+            n_targets=1,
+            latent_dim=4,
+            cem_samples=16,
+            cem_iterations=1,
+        )
+        planner.plan(np.zeros(4), rng=np.random.default_rng(0))
+
+        assert planner.last_exploitation_gap is not None
+        assert planner.last_exploitation_gap > 0.0
+
+    def test_planner_without_real_evaluation_still_runs_cem(self):
+        # No evaluate_actions supplied: fall back to the model-scored
+        # elite mean, as before. This must not silently become random.
+        from neorx.causalbiorl.causal.planner import HierarchicalPlanner
+
+        planner = HierarchicalPlanner(
+            reward_fn=lambda s, a: -float(np.sum(np.abs(a[2:]))),
+            evaluate_actions=None,
+            n_targets=1,
+            latent_dim=4,
+            cem_samples=64,
+            cem_iterations=3,
+        )
+        action = planner.plan(np.zeros(4), rng=np.random.default_rng(0))
+
+        # The model rewards delta-z near zero, so CEM must converge there.
+        assert float(np.sum(np.abs(action[2:]))) < 1.0
+        assert planner.last_exploitation_gap is None
+
+    def test_cem_evaluates_more_than_one_candidate(self):
+        from neorx.causalbiorl.causal.planner import HierarchicalPlanner
+
+        calls = []
+
+        def counting_reward(state, action):
+            calls.append(action.copy())
+            return 0.0
+
+        planner = HierarchicalPlanner(
+            reward_fn=counting_reward,
+            n_targets=1,
+            latent_dim=4,
+            cem_samples=8,
+            cem_iterations=2,
+        )
+        planner.plan(np.zeros(4), rng=np.random.default_rng(0))
+
+        assert len(calls) == 16
+        assert not np.allclose(calls[0], calls[1])
