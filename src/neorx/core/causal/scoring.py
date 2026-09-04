@@ -14,8 +14,8 @@ from typing import Any
 import networkx as nx
 import numpy as np
 
-from neorx.core.graph.models import DiseaseGraph, NeoRxResult, TargetClassification
 from neorx.core.bio.classifier import TargetType
+from neorx.core.graph.models import DiseaseGraph, NeoRxResult, TargetClassification
 
 
 def assess_druggability(node_data: dict[str, Any]) -> float:
