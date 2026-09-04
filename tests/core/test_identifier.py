@@ -207,6 +207,68 @@ class TestIdentificationIsReported:
             if t.identification_reason == "no_causal_path":
                 assert not t.identifiable
 
+    def _pathogen_result(self, metadata: dict, disease: str = "malaria"):
+        import networkx as nx
+
+        from neorx.core.causal.scoring import evaluate_pathogen_target
+
+        G = nx.DiGraph()
+        G.add_node(
+            "PATHOGEN:X",
+            name="PfDHFR",
+            node_type="pathogen_gene",
+            metadata=metadata,
+            pdb_ids=[],
+        )
+        return evaluate_pathogen_target(
+            G, "PATHOGEN:X", "MONDO:1", None,
+            causal_pathway=[], disease_name=disease,
+        )
+
+    def test_a_pathogen_target_is_not_scored_as_identifiable(self):
+        """The score must agree with the verdict the same result reports.
+
+        ``evaluate_pathogen_target`` reports identifiable=False /
+        "no_causal_path" -- pathogen targets bypass causal path analysis,
+        so the backdoor criterion is never attempted. Its confidence
+        formula nonetheless awarded the full ``0.15 * 1.0``
+        identifiability bonus, so the published failure taxonomy counted
+        these as no_causal_path failures while the results table scored
+        them as if identified. A node with *empty* metadata reached
+        confidence 0.67, over the 0.6 CAUSAL threshold, on four constants.
+        """
+        result = self._pathogen_result({})
+
+        assert result.identifiable is False
+        assert result.identification_reason == "no_causal_path"
+
+        # The remaining terms, with no identifiability bonus:
+        # 0.40*drug_score(0.5) + 0.25*druggability(0.8)
+        # + 0.10*org_relevance(0.3) + 0.10*specificity(0.9)
+        assert result.causal_confidence == pytest.approx(0.52)
+        assert result.causal_confidence < 0.6, (
+            "an empty-metadata pathogen node must not clear the CAUSAL "
+            "threshold on constants alone"
+        )
+
+    def test_pathogen_confidence_still_tracks_real_drug_evidence(self):
+        """Removing the bonus lowers scores; it does not flatten them.
+
+        A Phase 4 target of the organism that actually causes the disease
+        still clears the threshold on evidence rather than on constants.
+        """
+        strong = self._pathogen_result(
+            {
+                "chembl_drug_evidence_score": 0.9,
+                "clinical_phase": 4,
+                "n_drugs": 3,
+                "pathogen_organism": "Plasmodium falciparum",
+            },
+        )
+        assert strong.causal_confidence == pytest.approx(0.80)
+        assert strong.is_causal_target
+        assert strong.causal_confidence > self._pathogen_result({}).causal_confidence
+
 
 class TestCorroborationCountsPrimaryEvidence:
     def test_an_aggregator_does_not_double_count_a_shared_interaction(self):

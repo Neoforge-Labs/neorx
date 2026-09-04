@@ -379,17 +379,33 @@ def evaluate_pathogen_target(
     # Druggability — pathogen drug targets are druggable by definition
     druggability = 1.0 if clinical_phase >= 3 else 0.8
 
+    # ── Identifiability ─────────────────────────────────────────
+    #    Pathogen targets bypass causal path analysis entirely (see the
+    #    docstring), so the backdoor criterion is never attempted for
+    #    them and no adjustment set is ever found. The verdict this
+    #    function reports is therefore not-identifiable, and the
+    #    confidence formula below reads that same verdict instead of
+    #    asserting its opposite: the formula used to award the full
+    #    identifiability bonus with the comment "always identifiable"
+    #    while the returned NeoRxResult said identifiable=False with
+    #    reason "no_causal_path". A target counted as a no_causal_path
+    #    failure in the published taxonomy was simultaneously scored as
+    #    though identifiable, and could clear the 0.6 CAUSAL threshold
+    #    on constants alone.
+    identifiable = False
+    identification_reason = "no_causal_path"
+
     # Causal confidence for pathogen targets:
     # Based entirely on drug evidence (not graph topology)
     #   40% drug_score (phase + drug diversity + MOA diversity)
     #   25% druggability (always high for validated targets)
-    #   15% identifiability (has path to disease? always yes)
+    #   15% identifiability (never awarded: see above)
     #   10% organism relevance (is this pathogen THE cause?)
     #   10% specificity (pathogen targets are highly specific)
     confidence = (
         0.40 * drug_score
         + 0.25 * druggability
-        + 0.15 * 1.0  # always identifiable (known drug target)
+        + 0.15 * (1.0 if identifiable else 0.0)
         + 0.10 * org_relevance  # organism must match the disease
         + 0.10 * 0.9  # pathogen targets are disease-specific
     )
@@ -450,8 +466,8 @@ def evaluate_pathogen_target(
         pdb_ids=node_data.get("pdb_ids", []),
         causal_confidence=confidence,
         adjustment_set=[],
-        identifiable=False,
-        identification_reason="no_causal_path",
+        identifiable=identifiable,
+        identification_reason=identification_reason,
         causal_pathway=causal_pathway,
         robustness_score=robustness,
         druggability_score=druggability,
