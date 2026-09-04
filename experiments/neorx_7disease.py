@@ -145,7 +145,8 @@ def _evaluate_disease(disease: str) -> dict:
     ``get_ground_truth_genes()`` / ``get_known_false_targets()`` for the
     correlation-only baseline.
     """
-    from neorx.core.causal.identifier import evaluate_all_targets, rank_causal_targets
+    from neorx.core.causal.identifier import evaluate_all_targets
+    from neorx.core.causal.ranking import rank_causal_targets
     from neorx.core.graph.graph_builder import build_disease_graph
     from neorx.core.validator import KnownTargetValidator
 

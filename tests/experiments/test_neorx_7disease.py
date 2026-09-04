@@ -98,7 +98,7 @@ def test_a_disease_absent_from_ground_truth_raises_instead_of_fabricating(monkey
         lambda graph: [_FakeTarget()],
     )
     monkeypatch.setattr(
-        "neorx.core.causal.identifier.rank_causal_targets",
+        "neorx.core.causal.ranking.rank_causal_targets",
         lambda results, top_n=20: list(results),
     )
 
@@ -363,8 +363,8 @@ def test_summary_covers_every_evaluated_candidate_not_the_reported_top_n():
     from neorx.core.causal.identifier import (
         evaluate_all_targets,
         identify_causal_targets,
-        rank_causal_targets,
     )
+    from neorx.core.causal.ranking import rank_causal_targets
 
     n_candidates = TOP_N + 5
     graph = _synthetic_disease_graph(n_candidates)

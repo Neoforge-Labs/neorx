@@ -81,6 +81,7 @@ from neorx.core.causal.evidence import (
     count_pathway_connections,
     count_protein_interactions,
 )
+from neorx.core.causal.ranking import rank_causal_targets
 from neorx.core.causal.scoring import (
     assess_druggability,
     classify_target,
@@ -113,15 +114,11 @@ def identify_causal_targets(
     list[NeoRxResult]
         Ranked list of causal target assessments, best first.
 
-    See Also
-    --------
-    evaluate_all_targets
-        The unfiltered evaluation of every candidate, before ranking.
-        Any statistic *about the evaluation* -- an identifiability rate,
-        a failure breakdown -- must be computed over that list. This
-        one is ranked by ``causal_confidence``, which itself rewards
-        identifiability, so a rate measured over it is measured on a
-        sample the rate selected.
+    Any statistic *about the evaluation* -- an identifiability rate, a
+    failure breakdown -- belongs on ``evaluate_all_targets`` instead:
+    this list is ranked by ``causal_confidence``, which itself rewards
+    identifiability, so a rate measured over it is measured on a sample
+    the rate selected.
     """
     return rank_causal_targets(
         evaluate_all_targets(graph),
@@ -134,15 +131,13 @@ def evaluate_all_targets(graph: DiseaseGraph) -> list[NeoRxResult]:
     """Evaluate every candidate target in the graph, filtering nothing.
 
     This is the population ``identify_causal_targets`` then ranks and
-    truncates. It is what any statistic describing the identification
-    procedure has to be computed over: how often the backdoor criterion
-    succeeded, why it failed when it did, how many candidates there
-    were. Measuring those over the returned top-N instead would measure
-    them on a sample selected partly *by* identifiability, since
-    ``compute_causal_confidence`` awards a bonus for it.
+    truncates, and what any statistic describing the identification
+    procedure has to be computed over -- ``compute_causal_confidence``
+    awards a bonus for being identifiable, so the top-N is a sample
+    selected partly by the property such a statistic measures.
 
-    Returns the results sorted by ``causal_confidence`` descending --
-    ordering only; nothing is dropped.
+    Sorted by ``causal_confidence`` descending: ordering only, nothing
+    dropped.
     """
     G = disease_graph_to_networkx(graph)
     disease_node_id = _find_disease_node(G, graph.disease_name)
@@ -191,53 +186,6 @@ def evaluate_all_targets(graph: DiseaseGraph) -> list[NeoRxResult]:
     results.sort(key=lambda r: r.causal_confidence, reverse=True)
 
     return results
-
-
-def rank_causal_targets(
-    results: list[NeoRxResult],
-    top_n: int = 10,
-    min_causal_confidence: float = 0.3,
-) -> list[NeoRxResult]:
-    """Filter and rank evaluated targets down to the reported top-N.
-
-    Split out of ``identify_causal_targets`` so the full evaluated list
-    stays reachable: the ranking below is confidence-ordered, and
-    confidence rewards identifiability, so the survivors are not a
-    representative sample of what was evaluated.
-    """
-    # Split human and pathogen results to prevent pathogen targets
-    # from completely crowding out human targets.  Each pool gets
-    # at least half the slots (with leftover going to whichever
-    # pool has more high-confidence results).
-    human_results = [r for r in results if r.target_type != "PATHOGEN_DIRECT"]
-    pathogen_results = [r for r in results if r.target_type == "PATHOGEN_DIRECT"]
-
-    half = top_n // 2
-    # Each pool gets at least half, remainder filled from the other
-    top_human = [r for r in human_results if r.causal_confidence >= min_causal_confidence][:half]
-    top_pathogen = [r for r in pathogen_results if r.causal_confidence >= min_causal_confidence][:half]
-
-    # Fill remaining slots from whichever pool has leftovers
-    remaining = top_n - len(top_human) - len(top_pathogen)
-    if remaining > 0:
-        used_ids = {r.protein_id for r in top_human} | {r.protein_id for r in top_pathogen}
-        overflow = [
-            r for r in results
-            if r.protein_id not in used_ids
-            and r.causal_confidence >= min_causal_confidence
-        ][:remaining]
-        combined = top_human + top_pathogen + overflow
-    else:
-        combined = top_human + top_pathogen
-
-    # Re-sort the combined list by confidence
-    combined.sort(key=lambda r: r.causal_confidence, reverse=True)
-
-    if not combined:
-        # If nothing passes threshold, return top_n anyway
-        combined = results[:top_n]
-
-    return combined[:top_n]
 
 
 def _find_disease_node(G: nx.DiGraph, disease_name: str) -> str | None:

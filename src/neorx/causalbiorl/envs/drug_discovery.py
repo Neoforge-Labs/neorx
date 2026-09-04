@@ -470,17 +470,10 @@ class DrugDiscoveryEnv(gym.Env):
     ) -> tuple[dict[str, float], dict[str, float | None]]:
         """Screen a molecule; return its normalised scores and raw measurements.
 
-        Thin orchestration over ``screening.py``'s pure scoring functions:
-        owns the surrogate's lazy construction and the per-difficulty noise
-        draw (which consumes ``self.np_random`` -- a real mutation).
-
-        The first element is the per-objective scores in [0, 1] that the
-        reward and the observation consume. The second is the same
-        molecule's raw measurements in their own units -- binding in
-        kcal/mol, SA on the 1-10 scale, QED in [0, 1] -- with None for
-        anything that could not be measured. The measurements carry no
-        noise and no neutral-prior substitution, so a reporter can publish
-        them as the measurements they are.
+        Thin orchestration over ``screening.screen_molecule``: owns the
+        surrogate's lazy construction and the per-difficulty noise draw
+        (which consumes ``self.np_random`` -- a real mutation). The noise
+        perturbs the scores only; the measurements stay as measured.
         """
         if self.use_surrogate and self._surrogate is None:
             try:
@@ -489,30 +482,11 @@ class DrugDiscoveryEnv(gym.Env):
             except Exception:
                 pass  # screening.measure_binding treats a missing surrogate as a failed lookup
 
-        from neorx.causalbiorl.causal.reward_learner import (
-            normalise_binding,
-            normalise_sa,
+        scores, measurements = screening.screen_molecule(
+            smiles, target,
+            use_surrogate=self.use_surrogate,
+            surrogate=self._surrogate,
         )
-
-        measurements: dict[str, float | None] = {
-            "binding": screening.measure_binding(
-                smiles, target,
-                use_surrogate=self.use_surrogate,
-                surrogate=self._surrogate,
-            ),
-            "qed": screening.measure_qed(smiles),
-            "sa": screening.measure_synthetic_accessibility(smiles),
-        }
-
-        qed = measurements["qed"]
-        scores: dict[str, float] = {
-            "binding": normalise_binding(measurements["binding"]),
-            "qed": 0.5 if qed is None else qed,
-            "sa": normalise_sa(measurements["sa"]),
-            "novelty": screening.score_novelty(smiles),
-            "causal": target.causal_confidence,
-            "stability": screening.score_stability(smiles, target),
-        }
 
         # Add noise for difficulty
         if self._noise_std > 0:

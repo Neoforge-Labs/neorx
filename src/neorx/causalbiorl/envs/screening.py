@@ -123,6 +123,51 @@ def measure_synthetic_accessibility(smiles: str) -> float | None:
         return None
 
 
+def screen_molecule(
+    smiles: str,
+    target: _TargetState,
+    *,
+    use_surrogate: bool,
+    surrogate: Any,
+) -> tuple[dict[str, float], dict[str, float | None]]:
+    """Screen a molecule; return its normalised scores and raw measurements.
+
+    The first element is the per-objective scores in [0, 1] the reward and
+    the observation consume. The second is the same molecule's raw
+    measurements in their own units -- binding in kcal/mol, SA on the
+    1-10 scale, QED in [0, 1] -- with None for anything not measured.
+
+    Both are returned because the normalisations are lossy: they
+    substitute a neutral prior for a missing measurement and clamp
+    out-of-range values, so a reporter that inverted them would publish
+    numbers no measurement supports.
+    """
+    from neorx.causalbiorl.causal.reward_learner import (
+        normalise_binding,
+        normalise_sa,
+    )
+
+    measurements: dict[str, float | None] = {
+        "binding": measure_binding(
+            smiles, target, use_surrogate=use_surrogate, surrogate=surrogate,
+        ),
+        "qed": measure_qed(smiles),
+        "sa": measure_synthetic_accessibility(smiles),
+    }
+
+    qed = measurements["qed"]
+    scores: dict[str, float] = {
+        "binding": normalise_binding(measurements["binding"]),
+        "qed": 0.5 if qed is None else qed,
+        "sa": normalise_sa(measurements["sa"]),
+        "novelty": score_novelty(smiles),
+        "causal": target.causal_confidence,
+        "stability": score_stability(smiles, target),
+    }
+
+    return scores, measurements
+
+
 def score_novelty(smiles: str) -> float:
     """Get structural novelty vs known drugs."""
     try:
