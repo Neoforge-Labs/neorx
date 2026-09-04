@@ -137,3 +137,106 @@ class TestEstimateAdmet:
     def test_clamped(self):
         score = _estimate_admet(mw=300.0, logp=2.5, qed=0.9)
         assert 0.0 <= score <= 1.0
+
+
+class TestRLPipelineFailureIsReported:
+    """A failed RL run must not report COMPLETE.
+
+    ``run_rl_pipeline`` wrapped the RL loop in
+    ``except Exception: logger.warning("RL loop failed (%s) — collecting
+    partial results.")``. There are no partial results to collect --
+    ``all_candidates`` is populated all-or-nothing by
+    ``generate_candidates_with_rl`` -- so the job finished COMPLETE with
+    zero candidates and a single warning line. That is what hid the
+    AttributeError in the RL stage on every run for the project's entire
+    history.
+    """
+
+    def _minimal_graph(self):
+        from neorx.core.graph.models import (
+            DiseaseGraph,
+            EdgeType,
+            GraphEdge,
+            GraphNode,
+            NodeType,
+        )
+
+        return DiseaseGraph(
+            disease_name="testdisease",
+            disease_id="MONDO:0000001",
+            nodes=[
+                GraphNode(
+                    node_id="MONDO:0000001",
+                    name="testdisease",
+                    node_type=NodeType.DISEASE,
+                    source="test",
+                    score=1.0,
+                ),
+                GraphNode(
+                    node_id="GENE:G00",
+                    name="G00",
+                    node_type=NodeType.GENE,
+                    source="test",
+                    score=0.5,
+                ),
+            ],
+            edges=[
+                GraphEdge(
+                    source_id="GENE:G00",
+                    target_id="MONDO:0000001",
+                    edge_type=EdgeType.ASSOCIATED_WITH,
+                    weight=0.6,
+                    source_db="test",
+                )
+            ],
+            sources_queried=["test"],
+        )
+
+    def test_a_raising_rl_loop_marks_the_job_failed(self, monkeypatch):
+        import neorx.core.pipeline as pipeline_module
+        from neorx.core.pipeline import run_rl_pipeline
+
+        def boom(*args, **kwargs):
+            raise AttributeError("'DrugDiscoveryEnv' object has no attribute '_target_states'")
+
+        monkeypatch.setattr(pipeline_module, "generate_candidates_with_rl", boom)
+
+        result = run_rl_pipeline(
+            "testdisease",
+            top_n_targets=1,
+            n_episodes=1,
+            max_steps_per_episode=10,
+            prebuilt_graph=self._minimal_graph(),
+        )
+
+        assert result.job.status == JobStatus.FAILED
+        assert result.job.status != JobStatus.COMPLETE
+        assert "_target_states" in result.job.error
+
+    def test_a_missing_causalbiorl_still_falls_back(self, monkeypatch):
+        """The one recoverable failure keeps its fallback.
+
+        CausalBioRL is optional and the linear flow is a real
+        alternative that produces real candidates -- unlike the broad
+        catch this replaced, which produced none.
+        """
+        import neorx.core.pipeline as pipeline_module
+        from neorx.core.pipeline import run_rl_pipeline
+
+        def no_module(*args, **kwargs):
+            raise ImportError("No module named 'neorx.causalbiorl'")
+
+        monkeypatch.setattr(pipeline_module, "generate_candidates_with_rl", no_module)
+        monkeypatch.setattr(
+            pipeline_module, "_generate_for_target", lambda target, n: [],
+        )
+
+        result = run_rl_pipeline(
+            "testdisease",
+            top_n_targets=1,
+            n_episodes=1,
+            max_steps_per_episode=10,
+            prebuilt_graph=self._minimal_graph(),
+        )
+
+        assert result.job.status == JobStatus.COMPLETE

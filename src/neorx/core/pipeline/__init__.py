@@ -790,6 +790,21 @@ def run_rl_pipeline(
             )
 
         except ImportError as e:
+            # The only recoverable failure here: CausalBioRL is optional,
+            # and there is a real alternative path that produces real
+            # candidates. Everything else propagates to the handler at
+            # the end of this function, which marks the job FAILED and
+            # records the error.
+            #
+            # There is deliberately no broad `except Exception` around
+            # the RL loop. It used to log "collecting partial results"
+            # and continue -- but all_candidates is populated
+            # all-or-nothing by generate_candidates_with_rl, so there
+            # were never partial results to collect: the job reported
+            # COMPLETE with zero candidates and one warning line. That
+            # is what hid the AttributeError from the RL stage reading a
+            # `_target_states` attribute that never existed, on every
+            # run, for the project's entire history.
             logger.warning(
                 "CausalBioRL not available (%s) — "
                 "falling back to linear pipeline.",
@@ -800,9 +815,6 @@ def run_rl_pipeline(
                 smiles_list = _generate_for_target(target, max_steps_per_episode)
                 screened = _screen_candidates(smiles_list, target)
                 all_candidates.extend(screened)
-
-        except Exception as e:
-            logger.warning("RL loop failed (%s) — collecting partial results.", e)
 
         # ── Step 4: Score & Rank ────────────────────────────────
         job.status = JobStatus.SCORING
