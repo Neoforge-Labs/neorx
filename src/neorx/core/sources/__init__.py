@@ -26,6 +26,7 @@ from .open_targets import query_open_targets
 from .kegg import query_kegg_pathways
 from .reactome import query_reactome_pathways
 from .string_db import query_string_interactions
+from .omnipath import query_omnipath
 from .uniprot import query_uniprot
 from .pdb import query_pdb_structures
 from .chembl import query_chembl
@@ -36,6 +37,7 @@ __all__ = [
     "query_kegg_pathways",
     "query_reactome_pathways",
     "query_string_interactions",
+    "query_omnipath",
     "query_uniprot",
     "query_pdb_structures",
     "query_chembl",

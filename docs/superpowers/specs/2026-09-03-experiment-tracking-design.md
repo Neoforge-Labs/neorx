@@ -37,7 +37,7 @@ Sub-project 2 of four. Sub-project 1 (package skeleton) is complete and merged.
 |---|-------------|--------|
 | 1 | Package skeleton | Complete — merged at `43d3ad2` |
 | **2** | **Experiment tracking** | **This spec** |
-| 3 | Correctness | Split `identifier.py` / `drug_discovery.py`; fix backdoor logic; make the CEM inner loop decode |
+| 3 | Correctness | Spec + plan written — `docs/superpowers/plans/2026-09-03-correctness.md` |
 | 4 | Test hardening | Behaviour tests; molscreen from zero coverage |
 
 ---

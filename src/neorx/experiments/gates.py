@@ -312,3 +312,48 @@ def check_cited_runs(manifest: Path, runs_dir: Path) -> list[Finding]:
                     )
                 )
     return findings
+
+
+# Names whose presence in the causal package means a fabricated statistic
+# has come back. Each was removed for a specific reason:
+#   _bootstrap_confidence_interval / _bootstrap_ci -- percentiles of
+#       hand-chosen Gaussian noise added to deterministic scores, so the
+#       interval width was a readout of two constants
+#   p_value -- a rescaling of a heuristic score, with no null distribution
+#   d_separated -- removed from NetworkX; every call raised, and the
+#       except branch continued as though it had passed
+_FABRICATED_STATISTIC_NAMES = (
+    "_bootstrap_confidence_interval",
+    "_bootstrap_ci",
+    "p_value",
+    "d_separated",
+)
+
+
+def check_no_fabricated_statistics(causal_dir: Path) -> list[Finding]:
+    """Assert no fabricated statistic has been reintroduced.
+
+    Scoped to a directory by argument, never to ``src/`` as a whole:
+    ``neorx/genmol/evaluation/distribution.py`` reports a genuine
+    Kolmogorov-Smirnov p-value, and a repository-wide search would flag
+    it. Point this at ``neorx/core/causal/`` only.
+    """
+    findings: list[Finding] = []
+
+    for path in sorted(causal_dir.rglob("*.py")):
+        for lineno, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1,
+        ):
+            for name in _FABRICATED_STATISTIC_NAMES:
+                if name in line:
+                    findings.append(Finding(
+                        path=str(path),
+                        line=lineno,
+                        message=(
+                            f"{name} is a fabricated statistic removed in "
+                            f"sub-project 3; it must not return. See "
+                            f"docs/superpowers/specs/2026-09-03-correctness-design.md"
+                        ),
+                    ))
+
+    return findings

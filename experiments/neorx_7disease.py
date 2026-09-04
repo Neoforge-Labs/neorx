@@ -44,6 +44,59 @@ TOP_N = 20
 CHEMBL_DB = Path("chembl_36.db")
 
 
+def summarise_identification(results) -> dict:
+    """Aggregate per-target identification verdicts for one disease.
+
+    ``results`` must be *every* evaluated candidate -- what
+    ``evaluate_all_targets`` returns -- not the ranked top-N that
+    ``identify_causal_targets`` reports. Ranking is by
+    ``causal_confidence``, which adds a bonus for being identifiable, so
+    the top-N is a sample selected partly by the quantity measured here:
+    a rate computed over it is inflated by construction, and its
+    ``reason_counts`` cannot sum to the number of candidates evaluated.
+
+    The non-trivial rate is the headline: a trivial verdict means the
+    graph held no confounder to adjust for, which in an open-world
+    knowledge graph is a statement about coverage rather than about
+    biology. Both rates are reported, along with the mean near-miss
+    count that says how exposed the trivial verdicts are.
+
+    Every reason appears in ``reason_counts`` even at zero, so a run's
+    breakdown has the same shape whatever it found.
+    """
+    from neorx.core.causal.backdoor import IdentificationReason
+
+    counts = {reason.value: 0 for reason in IdentificationReason}
+    for result in results:
+        reason = result.identification_reason
+        if reason in counts:
+            counts[reason] += 1
+
+    n = len(results)
+    n_by_adjustment = counts[IdentificationReason.IDENTIFIABLE_BY_ADJUSTMENT.value]
+    n_trivially = counts[IdentificationReason.IDENTIFIABLE_TRIVIALLY.value]
+    n_cyclic = counts[IdentificationReason.CYCLIC_COMPONENT.value]
+
+    trivial_near_misses = [
+        r.n_near_miss_confounders
+        for r in results
+        if r.identification_reason == IdentificationReason.IDENTIFIABLE_TRIVIALLY.value
+    ]
+
+    return {
+        "n_candidates": n,
+        "n_identifiable_by_adjustment": n_by_adjustment,
+        "n_identifiable_trivially": n_trivially,
+        "nontrivial_identifiability_rate": (n_by_adjustment / n) if n else 0.0,
+        "trivial_identifiability_rate": (n_trivially / n) if n else 0.0,
+        "cyclic_fraction": (n_cyclic / n) if n else 0.0,
+        "mean_near_miss_confounders": (
+            sum(trivial_near_misses) / len(trivial_near_misses) if trivial_near_misses else 0.0
+        ),
+        "reason_counts": counts,
+    }
+
+
 class UnvalidatableDiseaseError(RuntimeError):
     """Raised when a configured disease has no ground truth to validate against.
 
@@ -92,7 +145,8 @@ def _evaluate_disease(disease: str) -> dict:
     ``get_ground_truth_genes()`` / ``get_known_false_targets()`` for the
     correlation-only baseline.
     """
-    from neorx.core.causal.identifier import identify_causal_targets
+    from neorx.core.causal.identifier import evaluate_all_targets
+    from neorx.core.causal.ranking import rank_causal_targets
     from neorx.core.graph.graph_builder import build_disease_graph
     from neorx.core.validator import KnownTargetValidator
 
@@ -103,7 +157,16 @@ def _evaluate_disease(disease: str) -> dict:
     t_graph = round(time.perf_counter() - t0, 1)
 
     t1 = time.perf_counter()
-    targets = identify_causal_targets(graph, top_n=TOP_N)
+    # The evaluation of every candidate, and the top-N slice of it that
+    # gets reported. Kept apart deliberately: the P/R/F1 numbers describe
+    # what the pipeline reports, so they are computed over ``targets``;
+    # the identification summary describes how the backdoor criterion
+    # behaved, so it is computed over ``evaluations``. Computing the
+    # latter over ``targets`` would measure identifiability on a sample
+    # that ``causal_confidence`` -- which awards a bonus for being
+    # identifiable -- already filtered on.
+    evaluations = evaluate_all_targets(graph)
+    targets = rank_causal_targets(evaluations, top_n=TOP_N)
     t_identify = round(time.perf_counter() - t1, 1)
 
     target_dicts = [{"gene_symbol": t.gene_name, "is_causal": t.is_causal_target} for t in targets]
@@ -123,6 +186,7 @@ def _evaluate_disease(disease: str) -> dict:
     grade = report.quality_grade
 
     causal = [t for t in targets if t.is_causal_target]
+    identification_summary = summarise_identification(evaluations)
 
     corr = _correlation_only(graph, disease, validator)
 
@@ -148,6 +212,7 @@ def _evaluate_disease(disease: str) -> dict:
         "fp_ranks": corr["fp_ranks"],
         "t_graph": t_graph,
         "t_identify": t_identify,
+        **identification_summary,
     }
 
 

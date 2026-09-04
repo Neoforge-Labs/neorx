@@ -17,10 +17,11 @@ from neorx.core.causal.identifier import (
     identify_causal_targets,
     _find_disease_node,
     _find_causal_pathway,
-    _compute_adjustment_set,
     _sensitivity_analysis,
-    _compute_causal_confidence,
-    _classify_target,
+)
+from neorx.core.causal.scoring import (
+    compute_causal_confidence as _compute_causal_confidence,
+    classify_target as _classify_target,
 )
 from neorx.core.graph.models import (
     NeoRxResult,
@@ -91,15 +92,6 @@ class TestFindDiseasePath:
         assert len(path) > 0
 
 
-class TestAdjustmentSet:
-    """Test backdoor adjustment set computation."""
-
-    def test_returns_list(self, hiv_networkx):
-        disease_node = _find_disease_node(hiv_networkx, "HIV")
-        adj_set = _compute_adjustment_set(hiv_networkx, "gene:CCR5", disease_node)
-        assert isinstance(adj_set, list)
-
-
 class TestSensitivityAnalysis:
     """Test robustness estimation."""
 
@@ -152,7 +144,6 @@ class TestClassifyTarget:
         classification, reasoning = _classify_target(
             gene_name="CCR5",
             causal_confidence=0.8,
-            causal_effect=0.7,
             robustness=0.7,
             is_identifiable=True,
             n_pathways=3,
@@ -165,7 +156,6 @@ class TestClassifyTarget:
         classification, reasoning = _classify_target(
             gene_name="TNF",
             causal_confidence=0.2,
-            causal_effect=0.1,
             robustness=0.1,
             is_identifiable=False,
             n_pathways=1,
@@ -178,10 +168,138 @@ class TestClassifyTarget:
         classification, _ = _classify_target(
             gene_name="GENE_X",
             causal_confidence=0.5,
-            causal_effect=0.3,
             robustness=0.4,
             is_identifiable=True,
             n_pathways=1,
             druggability=0.3,
         )
         assert classification == TargetClassification.INCONCLUSIVE
+
+
+class TestIdentificationIsReported:
+    """The verdict, not an assumption.
+
+    Identifiability used to be `len(causal_pathway) > 0` -- the existence
+    of any path -- while the adjustment set was computed and discarded.
+    These tests pin the replacement.
+    """
+
+    def test_result_carries_the_identification_reason(self, hiv_graph):
+        from neorx.core.causal.backdoor import IdentificationReason
+
+        targets = identify_causal_targets(hiv_graph, top_n=5)
+        assert targets
+        valid = {r.value for r in IdentificationReason}
+        for t in targets:
+            assert t.identification_reason in valid
+
+    def test_non_identifiable_targets_have_an_empty_adjustment_set(self, hiv_graph):
+        targets = identify_causal_targets(hiv_graph, top_n=10)
+        for t in targets:
+            if not t.identifiable:
+                assert t.adjustment_set == []
+
+    def test_identifiability_no_longer_tracks_mere_path_existence(self, hiv_graph):
+        # A literature-only graph has paths in the full graph but none in
+        # the causal subgraph, so nothing may be identifiable.
+        targets = identify_causal_targets(hiv_graph, top_n=10)
+        for t in targets:
+            if t.identification_reason == "no_causal_path":
+                assert not t.identifiable
+
+    def _pathogen_result(self, metadata: dict, disease: str = "malaria"):
+        import networkx as nx
+
+        from neorx.core.causal.scoring import evaluate_pathogen_target
+
+        G = nx.DiGraph()
+        G.add_node(
+            "PATHOGEN:X",
+            name="PfDHFR",
+            node_type="pathogen_gene",
+            metadata=metadata,
+            pdb_ids=[],
+        )
+        return evaluate_pathogen_target(
+            G, "PATHOGEN:X", "MONDO:1", None,
+            causal_pathway=[], disease_name=disease,
+        )
+
+    def test_a_pathogen_target_is_not_scored_as_identifiable(self):
+        """The score must agree with the verdict the same result reports.
+
+        ``evaluate_pathogen_target`` reports identifiable=False /
+        "no_causal_path" -- pathogen targets bypass causal path analysis,
+        so the backdoor criterion is never attempted. Its confidence
+        formula nonetheless awarded the full ``0.15 * 1.0``
+        identifiability bonus, so the published failure taxonomy counted
+        these as no_causal_path failures while the results table scored
+        them as if identified. A node with *empty* metadata reached
+        confidence 0.67, over the 0.6 CAUSAL threshold, on four constants.
+        """
+        result = self._pathogen_result({})
+
+        assert result.identifiable is False
+        assert result.identification_reason == "no_causal_path"
+
+        # The remaining terms, with no identifiability bonus:
+        # 0.40*drug_score(0.5) + 0.25*druggability(0.8)
+        # + 0.10*org_relevance(0.3) + 0.10*specificity(0.9)
+        assert result.causal_confidence == pytest.approx(0.52)
+        assert result.causal_confidence < 0.6, (
+            "an empty-metadata pathogen node must not clear the CAUSAL "
+            "threshold on constants alone"
+        )
+
+    def test_pathogen_confidence_still_tracks_real_drug_evidence(self):
+        """Removing the bonus lowers scores; it does not flatten them.
+
+        A Phase 4 target of the organism that actually causes the disease
+        still clears the threshold on evidence rather than on constants.
+        """
+        strong = self._pathogen_result(
+            {
+                "chembl_drug_evidence_score": 0.9,
+                "clinical_phase": 4,
+                "n_drugs": 3,
+                "pathogen_organism": "Plasmodium falciparum",
+            },
+        )
+        assert strong.causal_confidence == pytest.approx(0.80)
+        assert strong.is_causal_target
+        assert strong.causal_confidence > self._pathogen_result({}).causal_confidence
+
+
+class TestCorroborationCountsPrimaryEvidence:
+    def test_an_aggregator_does_not_double_count_a_shared_interaction(self):
+        import networkx as nx
+        from neorx.core.causal.evidence import corroboration_factor
+
+        G = nx.DiGraph()
+        # STRING and OmniPath both report the same underlying interaction;
+        # OmniPath names STRING among its primary sources.
+        G.add_edge("gene:A", "gene:B", source_db="STRING",
+                   primary_sources=["STRING"])
+        G.add_edge("gene:A", "gene:C", source_db="OmniPath",
+                   primary_sources=["STRING"])
+
+        # One distinct primary source, not two aggregators.
+        assert corroboration_factor(G, "gene:A") == 1.1
+
+    def test_distinct_primary_sources_each_count(self):
+        import networkx as nx
+        from neorx.core.causal.evidence import corroboration_factor
+
+        G = nx.DiGraph()
+        G.add_edge("gene:A", "gene:B", source_db="OmniPath",
+                   primary_sources=["SIGNOR", "TRRUST"])
+        assert corroboration_factor(G, "gene:A") == pytest.approx(1.2)
+
+    def test_an_edge_without_primary_sources_falls_back_to_its_database(self):
+        import networkx as nx
+        from neorx.core.causal.evidence import corroboration_factor
+
+        G = nx.DiGraph()
+        G.add_edge("gene:A", "disease:d", source_db="Monarch",
+                   primary_sources=[])
+        assert corroboration_factor(G, "gene:A") == pytest.approx(1.1)

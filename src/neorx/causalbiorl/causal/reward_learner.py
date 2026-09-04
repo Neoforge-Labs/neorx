@@ -194,12 +194,32 @@ class AdaptiveRewardLearner:
     #  Reward Computation                                                  #
     # ------------------------------------------------------------------ #
 
+    def score(
+        self,
+        state: NDArray[np.floating],
+        objective_scores: dict[str, float],
+    ) -> float:
+        """The adaptively-weighted scalar reward, recording nothing.
+
+        ``compute_reward`` records each call into the weight and
+        objective histories, which makes it unusable for scoring
+        candidate actions -- a planner evaluating a batch would write
+        hundreds of phantom entries per environment step. This is the
+        pure half.
+        """
+        weights = self._compute_weights(state)
+        scores = np.array([
+            objective_scores.get(name, 0.0)
+            for name in OBJECTIVE_NAMES
+        ], dtype=np.float32)
+        return float(np.dot(weights, scores))
+
     def compute_reward(
         self,
         state: NDArray[np.floating],
         objective_scores: dict[str, float],
     ) -> float:
-        """Compute the adaptively-weighted scalar reward.
+        """Compute the reward and record it in the learner's history.
 
         Parameters
         ----------
@@ -220,7 +240,6 @@ class AdaptiveRewardLearner:
             for name in OBJECTIVE_NAMES
         ], dtype=np.float32)
 
-        # Track history
         self._weight_history.append(weights.copy())
         self._objective_history.append(scores.copy())
 

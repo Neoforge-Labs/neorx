@@ -221,8 +221,13 @@ class CausalAgent:
         self._scm: StructuralCausalModel | None = None
         self._planner: CausalPlanner | None = None
         self._hierarchical_planner: HierarchicalPlanner | None = None
-        self._reward_fn: Callable[..., float] | None = None
         self._reward_model = RewardPredictor(self.state_dim, self.action_dim)
+        # Assigned here, not in train(): pipeline.py calls
+        # init_hierarchical_planner() before train(), and
+        # HierarchicalPlanner captures this value rather than a
+        # reference. Leaving it None until train() meant the planner's
+        # CEM never ran in the end-to-end pipeline.
+        self._reward_fn: Callable[..., float] = self._reward_model.predict
 
         # Detect hierarchical mode (DrugDiscovery-v0)
         self._hierarchical_mode = self.action_dim > 10  # heuristic: latent_dim > 10
@@ -257,7 +262,12 @@ class CausalAgent:
         -------
         dict with training metrics.
         """
-        self._reward_fn = reward_fn or self._reward_model.predict
+        if reward_fn is not None:
+            self._reward_fn = reward_fn
+            if self._hierarchical_planner is not None:
+                self._hierarchical_planner.reward_fn = reward_fn
+            if self._planner is not None:
+                self._planner.reward_fn = reward_fn
 
         total_steps = 0
         pbar = tqdm(range(n_episodes), desc="CausalAgent", disable=not verbose)
@@ -345,6 +355,7 @@ class CausalAgent:
         self._hierarchical_planner = HierarchicalPlanner(
             scm=self._scm,
             reward_fn=self._reward_fn,
+            evaluate_actions=getattr(self.env, "evaluate_actions", None),
             n_targets=n_targets,
             latent_dim=latent_dim,
         )

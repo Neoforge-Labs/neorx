@@ -160,3 +160,44 @@ class TestPDB:
         for gene, uid in [("ABCXYZ", "Q99999"), ("FOOBR1", "P12345")]:
             results = query_pdb_structures({gene: uid}, allow_mocks=True)
             assert len(results.get(gene, [])) > 0, f"No mock data for '{gene}'"
+
+
+def test_genetic_association_wins_when_it_is_the_strongest_datatype():
+    from neorx.core.sources.open_targets import _evidence_class_for
+    assert _evidence_class_for(
+        {"genetic_association": 0.6, "literature": 0.2}
+    ) == "genetic_association"
+
+
+def test_somatic_mutation_is_admissible_evidence():
+    from neorx.core.sources.open_targets import _evidence_class_for
+    assert _evidence_class_for(
+        {"somatic_mutation": 0.5, "literature": 0.9}
+    ) == "somatic_mutation"
+
+
+def test_genetic_association_outranks_somatic_mutation_when_both_present():
+    from neorx.core.sources.open_targets import _evidence_class_for
+    assert _evidence_class_for(
+        {"genetic_association": 0.1, "somatic_mutation": 0.9}
+    ) == "genetic_association"
+
+
+def test_literature_only_association_is_classified_as_literature():
+    from neorx.core.sources.open_targets import _evidence_class_for
+    assert _evidence_class_for(
+        {"literature": 0.8, "rna_expression": 0.4}
+    ) == "literature"
+
+
+def test_absent_datatype_scores_yield_no_classification():
+    from neorx.core.sources.open_targets import _evidence_class_for
+    assert _evidence_class_for({}) == ""
+
+
+def test_zero_scored_genetic_evidence_does_not_count():
+    # A datatype present with a zero score is not evidence.
+    from neorx.core.sources.open_targets import _evidence_class_for
+    assert _evidence_class_for(
+        {"genetic_association": 0.0, "literature": 0.7}
+    ) == "literature"

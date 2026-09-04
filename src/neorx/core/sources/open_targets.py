@@ -34,6 +34,25 @@ OT_GRAPHQL = "https://api.platform.opentargets.org/api/v4/graphql"
 TIMEOUT = 30
 
 
+def _evidence_class_for(datatype_scores: dict[str, float]) -> str:
+    """Pick the evidence class for a gene-disease edge.
+
+    Open Targets breaks an association into datatypes. Two of them --
+    genetic_association and somatic_mutation -- carry a
+    natural-experiment warrant that lets the edge be treated as causal
+    downstream (see neorx.core.causal.graph_semantics). Everything else
+    is association. Genetic association is preferred over somatic
+    mutation when both are present, being the stronger warrant: germline
+    variants are randomised at conception, somatic ones are not.
+    """
+    for genetic in ("genetic_association", "somatic_mutation"):
+        if datatype_scores.get(genetic, 0.0) > 0.0:
+            return genetic
+    if any(score > 0.0 for score in datatype_scores.values()):
+        return "literature"
+    return ""
+
+
 def query_open_targets(
     disease_name: str,
     max_results: int = 25,
@@ -182,6 +201,8 @@ def query_open_targets(
                 weight=min(score, 1.0),
                 source_db="Open Targets",
                 evidence=f"OT score: {score:.3f}",
+                evidence_class=_evidence_class_for(dt_scores),
+                primary_sources=["Open Targets"],
             ))
 
         logger.info("Open Targets: %d targets for '%s'.", len(nodes), disease_name)

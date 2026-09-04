@@ -181,6 +181,13 @@ class HierarchicalPlanner:
         falls back to UCB without causal reasoning.
     reward_fn : callable
         ``(state, action) → float``.
+    evaluate_actions : callable | None
+        ``(state, actions) -> rewards`` scoring a batch of actions
+        against real chemistry. The CEM inner loop uses ``reward_fn``
+        because decoding every candidate is unaffordable; the final
+        elite set is confirmed through this, and the best real-scored
+        elite is what the planner emits. ``None`` falls back to the
+        model-scored elite mean.
     n_targets : int
         Number of available targets.
     latent_dim : int
@@ -199,6 +206,9 @@ class HierarchicalPlanner:
         self,
         scm: StructuralCausalModel | None = None,
         reward_fn: Callable[[NDArray[np.floating], NDArray[np.floating]], float] | None = None,
+        evaluate_actions: Callable[
+            [NDArray[np.floating], NDArray[np.floating]], NDArray[np.floating]
+        ] | None = None,
         n_targets: int = 5,
         latent_dim: int = 128,
         cem_samples: int = 200,
@@ -208,6 +218,8 @@ class HierarchicalPlanner:
     ) -> None:
         self.scm = scm
         self.reward_fn = reward_fn
+        self.evaluate_actions = evaluate_actions
+        self.last_exploitation_gap: float | None = None
         self.n_targets = n_targets
         self.latent_dim = latent_dim
         self.cem_samples = cem_samples
@@ -245,13 +257,7 @@ class HierarchicalPlanner:
         )
 
         # Compose hierarchical action
-        action = np.zeros(2 + self.latent_dim, dtype=np.float32)
-        # Map target index to continuous action in [-1, 1]
-        action[0] = (2.0 * target_idx / max(self.n_targets - 1, 1)) - 1.0
-        action[1] = -1.0  # no stop signal
-        action[2:] = delta_z
-
-        return action
+        return self._compose_action(target_idx, delta_z)
 
     def update(
         self,
@@ -294,18 +300,29 @@ class HierarchicalPlanner:
         target_embeddings: NDArray[np.floating] | None,
         rng: np.random.Generator,
     ) -> NDArray[np.floating]:
-        """CEM planning in GenMol’s latent space.
+        """CEM in the decoder's latent space, elites confirmed for real.
 
-        Generates candidate delta-z vectors and scores them using
-        the reward function.  Iteratively refines the distribution
-        toward high-reward regions.
+        The inner iterations score candidates with the learned reward
+        model: at 200 samples over 5 iterations that is 1000 evaluations
+        per environment step, and decoding all of them costs roughly 15
+        seconds even batched. The elites are few enough to decode and
+        screen properly, so they are, and the winner is chosen on that
+        real score rather than on the model's opinion of it.
         """
+        self.last_exploitation_gap = None
+
         if self.reward_fn is None:
-            return rng.standard_normal(self.latent_dim).astype(np.float32) * 0.3
+            raise ValueError(
+                "HierarchicalPlanner has no reward_fn, so its CEM cannot "
+                "score candidates. Pass one at construction -- returning "
+                "random latents here would silently reduce planning to noise."
+            )
 
         mean = np.zeros(self.latent_dim, dtype=np.float32)
         std = np.full(self.latent_dim, 0.3, dtype=np.float32)
         n_elite = max(int(self.cem_samples * self.cem_elite_frac), 1)
+        elite = np.tile(mean, (n_elite, 1))
+        elite_model_scores = np.zeros(n_elite, dtype=np.float32)
 
         for _ in range(self.cem_iterations):
             samples = rng.normal(
@@ -314,20 +331,41 @@ class HierarchicalPlanner:
             ).astype(np.float32)
             samples = np.clip(samples, -1.0, 1.0)
 
-            # Score each candidate
-            rewards = np.zeros(self.cem_samples, dtype=np.float32)
-            for j, dz in enumerate(samples):
-                # Build a candidate action
-                action = np.zeros(2 + self.latent_dim, dtype=np.float32)
-                action[0] = (2.0 * target_idx / max(self.n_targets - 1, 1)) - 1.0
-                action[1] = -1.0
-                action[2:] = dz
-                rewards[j] = self.reward_fn(state, action)
+            rewards = np.array([
+                self.reward_fn(state, self._compose_action(target_idx, dz))
+                for dz in samples
+            ], dtype=np.float32)
 
-            # Select elite
             elite_idx = np.argsort(rewards)[-n_elite:]
             elite = samples[elite_idx]
+            elite_model_scores = rewards[elite_idx]
             mean = elite.mean(axis=0)
             std = elite.std(axis=0) + 1e-6
 
-        return mean
+        if self.evaluate_actions is None:
+            return mean
+
+        elite_actions = np.stack([
+            self._compose_action(target_idx, dz) for dz in elite
+        ])
+        real_scores = np.asarray(
+            self.evaluate_actions(state, elite_actions), dtype=np.float64,
+        )
+
+        best = int(np.argmax(real_scores))
+        self.last_exploitation_gap = float(
+            np.max(elite_model_scores) - real_scores[best]
+        )
+        return elite[best]
+
+    def _compose_action(
+        self,
+        target_idx: int,
+        delta_z: NDArray[np.floating],
+    ) -> NDArray[np.float32]:
+        """Assemble ``[target_selector, stop_signal, delta_z...]``."""
+        action = np.zeros(2 + self.latent_dim, dtype=np.float32)
+        action[0] = (2.0 * target_idx / max(self.n_targets - 1, 1)) - 1.0
+        action[1] = -1.0
+        action[2:] = delta_z
+        return action

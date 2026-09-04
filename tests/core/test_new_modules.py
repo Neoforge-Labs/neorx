@@ -221,39 +221,6 @@ class TestSMILESCanonicalization:
         assert not result or result is None
 
 
-# ── confidence intervals ──────────────────────────────────
-from neorx.core.graph.models import NeoRxResult
-
-
-class TestConfidenceInterval:
-    """Test confidence_interval field on NeoRxResult."""
-
-    def test_default_ci(self):
-        r = NeoRxResult(
-            protein_id="test:P1",
-            protein_name="Protein1",
-            gene_name="GENE1",
-            uniprot_id="P00000",
-            pdb_ids=[],
-            causal_confidence=0.7,
-            is_causal_target=True,
-        )
-        assert r.confidence_interval == (0.0, 1.0)
-
-    def test_custom_ci(self):
-        r = NeoRxResult(
-            protein_id="test:P1",
-            protein_name="Protein1",
-            gene_name="GENE1",
-            uniprot_id="P00000",
-            pdb_ids=[],
-            causal_confidence=0.7,
-            is_causal_target=True,
-            confidence_interval=(0.55, 0.85),
-        )
-        assert r.confidence_interval == (0.55, 0.85)
-
-
 # ── resolve_disease_id ─────────────────────────────────────
 from neorx.core.sources.open_targets import resolve_disease_id
 
@@ -265,3 +232,32 @@ class TestResolveDiseaseId:
         # Should not raise even with bad network
         result = resolve_disease_id("nonexistent_disease_xyz")
         assert result is None or isinstance(result, str)
+
+
+# ── no fabricated statistics ────────────────────────────────
+
+def test_neorx_result_has_no_fabricated_statistics():
+    """No effect size, no p-value, no confidence interval.
+
+    All three were computed from heuristic scores with no data behind
+    them: the CI was percentiles of hand-chosen Gaussian noise, and the
+    p-value was a rescaling of the effect. robustness_score stays --
+    leave-one-source-out is a real measurement.
+    """
+    from neorx.core.graph.models import NeoRxResult
+
+    fields = set(NeoRxResult.model_fields)
+    assert "causal_effect" not in fields
+    assert "confidence_interval" not in fields
+    assert "p_value" not in fields
+    assert "robustness_score" in fields
+
+
+def test_counterfactual_result_has_no_confidence_interval():
+    from neorx.core.causal.counterfactual import CounterfactualResult
+
+    assert "confidence_interval" not in set(
+        CounterfactualResult.__dataclass_fields__
+        if hasattr(CounterfactualResult, "__dataclass_fields__")
+        else CounterfactualResult.model_fields
+    )

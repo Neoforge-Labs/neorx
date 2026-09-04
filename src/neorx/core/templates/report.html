@@ -280,7 +280,7 @@
           <th>Protein</th>
           <th>Classification</th>
           <th>Causal Confidence</th>
-          <th>95% CI</th>
+          <th>Identifiability</th>
           <th>Robustness</th>
           <th>Druggability</th>
           <th>Pathways</th>
@@ -307,7 +307,7 @@
               <div class="fill" style="width:{{ (t.causal_confidence * 100)|int }}%"></div>
             </div>
           </td>
-          <td style="font-size:0.85em">[{{ "%.2f"|format(t.confidence_interval.0) }}, {{ "%.2f"|format(t.confidence_interval.1) }}]</td>
+          <td style="font-size:0.85em">{{ t.identification_reason|replace("_", " ") }}</td>
           <td>{{ "%.3f"|format(t.robustness) }}</td>
           <td>{{ "%.3f"|format(t.druggability) }}</td>
           <td>{{ t.n_pathways }}</td>
