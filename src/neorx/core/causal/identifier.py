@@ -618,8 +618,9 @@ def _estimate_evidence_score(
        shortest causal path.  Stronger edges (higher evidence)
        yield stronger effects.
 
-    2. **d-Separation validity**: Does the adjustment set block
-       confounding paths?  Verified via ``nx.d_separated()``.
+    2. **Adjustment set strength**: Whether an adjustment set was
+       identified by ``find_adjustment_set``. Heuristic weight, not a
+       d-separation result; identification is done there, not here.
 
     3. **Topological importance**: Betweenness centrality —
        central nodes have broader causal influence.
@@ -642,19 +643,11 @@ def _estimate_evidence_score(
     # 1. Path-based strength
     path_strength = _compute_path_strength(G, treatment, outcome)
 
-    # 2. d-Separation quality
-    dsep_factor = 1.0
-    if adjustment_set:
-        try:
-            z = frozenset(adjustment_set)
-            # In the mutilated graph (remove arrows into treatment),
-            # check if adjustment blocks confounding
-            if nx.d_separated(G, {treatment}, {outcome}, z):
-                dsep_factor = 1.2  # bonus for clean identification
-        except Exception:
-            pass
-    else:
-        dsep_factor = 0.8  # No confounders blocked
+    # 2. Adjustment set weight
+    # Distinguish targets with an adjustment set (1.2) from those without (0.8).
+    # This is a heuristic weight; identification is decided by
+    # find_adjustment_set, not here.
+    dsep_factor = 1.2 if adjustment_set else 0.8
 
     # 3. Topological importance (betweenness centrality)
     try:
