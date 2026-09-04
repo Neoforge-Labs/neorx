@@ -56,6 +56,7 @@ from neorx.core.sources import (
     query_kegg_pathways,
     query_reactome_pathways,
     query_string_interactions,
+    query_omnipath,
     query_uniprot,
     query_pdb_structures,
     query_chembl,
@@ -201,6 +202,17 @@ def build_disease_graph(
     all_edges.extend(string_edges)
     sources_queried.append("STRING")
     logger.info("  STRING: %d nodes, %d edges.", len(string_nodes), len(string_edges))
+
+    # ── Step 3b: Directed Regulatory Interactions ───────────────
+
+    logger.info("Querying OmniPath regulatory interactions…")
+    omni_nodes, omni_edges = query_omnipath(
+        gene_symbols, allow_mocks=allow_mocks,
+    )
+    all_nodes.extend(omni_nodes)
+    all_edges.extend(omni_edges)
+    sources_queried.append("OmniPath")
+    logger.info("  OmniPath: %d directed edges.", len(omni_edges))
 
     # ── Step 4: UniProt Enrichment ──────────────────────────────
 
