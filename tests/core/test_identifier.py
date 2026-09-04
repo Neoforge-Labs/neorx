@@ -18,8 +18,10 @@ from neorx.core.causal.identifier import (
     _find_disease_node,
     _find_causal_pathway,
     _sensitivity_analysis,
-    _compute_causal_confidence,
-    _classify_target,
+)
+from neorx.core.causal.scoring import (
+    compute_causal_confidence as _compute_causal_confidence,
+    classify_target as _classify_target,
 )
 from neorx.core.graph.models import (
     NeoRxResult,

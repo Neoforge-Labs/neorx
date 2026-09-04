@@ -73,6 +73,20 @@ from neorx.core.graph.graph_builder import disease_graph_to_networkx
 from neorx.core.bio.classifier import TargetClassifier, TargetType, classify_disease
 from neorx.core.bio.tissue_filter import TissueFilter
 from neorx.core.causal.backdoor import find_adjustment_set
+from neorx.core.causal.evidence import (
+    collect_source_scores,
+    compute_path_strength,
+    count_evidence_streams,
+    count_pathway_connections,
+    count_protein_interactions,
+)
+from neorx.core.causal.scoring import (
+    assess_druggability,
+    classify_target,
+    compute_causal_confidence,
+    evaluate_pathogen_target,
+    organism_disease_relevance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -237,8 +251,10 @@ def _evaluate_target(
     #    They bypass biological classification and tissue filtering
     #    because those concepts only apply to human genes.
     if node_type_str == "pathogen_gene":
-        return _evaluate_pathogen_target(
+        causal_pathway = _find_causal_pathway(G, target_id, disease_id)
+        return evaluate_pathogen_target(
             G, target_id, disease_id, graph,
+            causal_pathway=causal_pathway,
             n_active_sources=n_active_sources,
             disease_name=disease_name,
         )
@@ -288,16 +304,16 @@ def _evaluate_target(
     # ── Step 4: Topological Evidence ────────────────────────────
 
     # Count supporting pathways
-    n_pathways = _count_pathway_connections(G, target_id)
+    n_pathways = count_pathway_connections(G, target_id)
 
     # Count protein interactions
-    n_interactions = _count_protein_interactions(G, target_id)
+    n_interactions = count_protein_interactions(G, target_id)
 
     # Source-level scores
-    source_scores = _collect_source_scores(graph, gene_name)
+    source_scores = collect_source_scores(graph, gene_name)
 
     # Druggability heuristic
-    druggability = _assess_druggability(node_data)
+    druggability = assess_druggability(node_data)
 
     # Disease specificity (from Open Targets)
     metadata = node_data.get("metadata", {})
@@ -305,7 +321,7 @@ def _evaluate_target(
 
     # ── Step 5: Composite Causal Confidence ─────────────────────
 
-    causal_confidence = _compute_causal_confidence(
+    causal_confidence = compute_causal_confidence(
         effect=abs(evidence_score),
         robustness=robustness,
         is_identifiable=is_identifiable,
@@ -320,14 +336,14 @@ def _evaluate_target(
     # ── Step 6: Classification ──────────────────────────────────
 
     # Count independent evidence streams
-    evidence_streams = _count_evidence_streams(
+    evidence_streams = count_evidence_streams(
         source_scores=source_scores,
         n_pathways=n_pathways,
         n_interactions=n_interactions,
         node_data=node_data,
     )
 
-    classification, reasoning = _classify_target(
+    classification, reasoning = classify_target(
         gene_name=gene_name,
         causal_confidence=causal_confidence,
         robustness=robustness,
@@ -366,212 +382,6 @@ def _evaluate_target(
         tissue_explanation=tissue_explanation,
         evidence_streams=evidence_streams,
     )
-
-
-def _evaluate_pathogen_target(
-    G: nx.DiGraph,
-    target_id: str,
-    disease_id: str,
-    graph: DiseaseGraph,
-    *,
-    n_active_sources: int = 4,
-    disease_name: str = "",
-) -> NeoRxResult:
-    """Evaluate a pathogen target from ChEMBL.
-
-    Pathogen targets (e.g. PfDHFR-TS, HIV-1 protease) are
-    validated by existing drugs.  Their confidence is based on
-    drug evidence rather than causal graph analysis:
-
-    - Clinical phase = highest weight (Phase 4 approved drug
-      = maximum confidence)
-    - Number of drugs targeting this protein
-    - Mechanism-of-action diversity
-
-    They bypass:
-    - Biological classifier (not host genes)
-    - Tissue filter (pathogen proteins don't express in human tissue)
-    - Causal path analysis (they're direct drug targets)
-    """
-    node_data = G.nodes[target_id]
-    gene_name = node_data.get("name", target_id)
-    metadata = node_data.get("metadata", {})
-
-    # Use graph.disease_name as fallback if disease_name not provided
-    if not disease_name and graph:
-        disease_name = graph.disease_name
-
-    # Drug evidence score from ChEMBL (already computed)
-    drug_score = metadata.get("chembl_drug_evidence_score", 0.5)
-    clinical_phase = metadata.get("clinical_phase", 0)
-    n_drugs = metadata.get("n_drugs", 0)
-    drugs = metadata.get("drugs", [])
-    moas = metadata.get("mechanisms_of_action", [])
-    organism = metadata.get("pathogen_organism", "unknown pathogen")
-
-    # ── Organism-disease relevance ──────────────────────────────
-    #    ChEMBL returns ALL targets of drugs indicated for a disease,
-    #    including co-infection antibiotics and anti-helminthics.
-    #    A Phase 4 bacterial ribosome target shouldn't score as high
-    #    as a Phase 4 P. falciparum DHFR for malaria.
-    org_relevance = _organism_disease_relevance(organism, disease_name)
-
-    # Causal pathway — direct path to disease node
-    causal_pathway = _find_causal_pathway(G, target_id, disease_id)
-
-    # Source scores — only ChEMBL for pathogen targets
-    source_scores = {"ChEMBL": drug_score}
-
-    # Druggability — pathogen drug targets are druggable by definition
-    druggability = 1.0 if clinical_phase >= 3 else 0.8
-
-    # Causal confidence for pathogen targets:
-    # Based entirely on drug evidence (not graph topology)
-    #   40% drug_score (phase + drug diversity + MOA diversity)
-    #   25% druggability (always high for validated targets)
-    #   15% identifiability (has path to disease? always yes)
-    #   10% organism relevance (is this pathogen THE cause?)
-    #   10% specificity (pathogen targets are highly specific)
-    confidence = (
-        0.40 * drug_score
-        + 0.25 * druggability
-        + 0.15 * 1.0  # always identifiable (known drug target)
-        + 0.10 * org_relevance  # organism must match the disease
-        + 0.10 * 0.9  # pathogen targets are disease-specific
-    )
-    confidence = round(min(1.0, max(0.0, confidence)), 4)
-
-    # Robust if Phase 3+ with multiple drugs AND organism matches
-    robustness = 0.0
-    if clinical_phase >= 4:
-        robustness = 0.9
-    elif clinical_phase >= 3:
-        robustness = 0.7
-    elif clinical_phase >= 2:
-        robustness = 0.5
-    elif clinical_phase >= 1:
-        robustness = 0.3
-    if n_drugs >= 3:
-        robustness = min(1.0, robustness + 0.1)
-
-    # Penalise robustness for off-target organisms
-    if org_relevance < 0.5:
-        robustness *= 0.3  # heavy penalty — wrong organism
-
-    # Evidence streams: ChEMBL drug evidence = 1 stream
-    # Plus structural if PDB IDs exist
-    evidence_streams = 1  # ChEMBL
-    if node_data.get("pdb_ids"):
-        evidence_streams += 1
-
-    # Classification
-    if confidence >= 0.6 and robustness >= 0.4:
-        classification = TargetClassification.CAUSAL
-        reasoning = (
-            f"🦠 {gene_name} is a validated PATHOGEN drug target "
-            f"({organism}). Phase {clinical_phase} with "
-            f"{n_drugs} drug(s): {', '.join(drugs[:3])}. "
-            f"MOA: {', '.join(moas[:2])}. "
-            f"Drug evidence score: {drug_score:.2f}."
-        )
-    elif confidence >= 0.4:
-        classification = TargetClassification.INCONCLUSIVE
-        reasoning = (
-            f"🦠 {gene_name} is a pathogen target ({organism}) "
-            f"with Phase {clinical_phase} evidence. Confidence "
-            f"{confidence:.2f} is moderate."
-        )
-    else:
-        classification = TargetClassification.CORRELATIONAL
-        reasoning = (
-            f"🦠 {gene_name} ({organism}) has weak drug evidence "
-            f"(Phase {clinical_phase}, confidence {confidence:.2f})."
-        )
-
-    return NeoRxResult(
-        protein_id=target_id,
-        protein_name=gene_name,
-        gene_name=gene_name,
-        uniprot_id=node_data.get("uniprot_id", ""),
-        pdb_ids=node_data.get("pdb_ids", []),
-        causal_confidence=confidence,
-        adjustment_set=[],
-        identifiable=False,
-        identification_reason="no_causal_path",
-        causal_pathway=causal_pathway,
-        robustness_score=robustness,
-        druggability_score=druggability,
-        classification=classification,
-        is_causal_target=(classification == TargetClassification.CAUSAL),
-        reasoning=reasoning,
-        source_scores=source_scores,
-        n_supporting_pathways=0,
-        n_protein_interactions=0,
-        target_type="PATHOGEN_DIRECT",
-        tissue_relevant=True,  # N/A for pathogen targets
-        tissue_coverage=0.0,
-        tissue_explanation="Pathogen target — tissue gate not applicable",
-        evidence_streams=evidence_streams,
-    )
-
-
-# ── Organism–Disease Relevance ─────────────────────────────────────
-
-# Keyword mapping: which organisms are the primary pathogens
-# for each disease.  This is basic epidemiology, not target curation.
-_DISEASE_ORGANISMS: dict[str, list[str]] = {
-    "malaria": ["plasmodium", "falciparum", "vivax", "malariae", "ovale", "knowlesi"],
-    "hiv": ["immunodeficiency", "hiv"],
-    "ebola": ["ebola", "ebolavirus"],
-    "tuberculosis": ["tuberculosis", "mycobacterium"],
-    "hepatitis": ["hepatitis"],
-    "covid": ["sars", "coronavirus"],
-    "influenza": ["influenza"],
-    "dengue": ["dengue"],
-    "zika": ["zika"],
-    "cholera": ["vibrio", "cholera"],
-    "typhoid": ["salmonella", "typhi"],
-    "leprosy": ["leprae", "leprosy"],
-    "chagas": ["trypanosoma", "cruzi"],
-    "sleeping sickness": ["trypanosoma", "brucei"],
-    "leishmaniasis": ["leishmania"],
-}
-
-
-def _organism_disease_relevance(
-    organism: str, disease_name: str,
-) -> float:
-    """Score how relevant a pathogen organism is to a disease.
-
-    Returns 1.0 if the organism matches the primary pathogen,
-    0.3 for generic/unrelated organisms, enabling the confidence
-    formula to demote off-target pathogens.
-
-    For non-infectious diseases (cancer, neurological, metabolic),
-    ALL pathogen targets get 0.0 — these diseases have no
-    causative pathogen, so any pathogen target in ChEMBL is from
-    co-prescribed medications (e.g. antibiotics for Alzheimer's
-    patients) and should not be ranked.
-    """
-    if not organism or not disease_name:
-        return 0.0
-
-    org_lower = organism.lower()
-    disease_lower = disease_name.lower()
-
-    # Check explicit mapping first
-    for disease_key, keywords in _DISEASE_ORGANISMS.items():
-        if disease_key in disease_lower:
-            for kw in keywords:
-                if kw in org_lower:
-                    return 1.0
-            # Disease matched a mapping but organism didn't → off-target
-            return 0.3
-
-    # No explicit mapping → this disease has no known pathogen.
-    # All pathogen targets are irrelevant (from co-prescribed
-    # medications like antibiotics, not disease-specific drugs).
-    return 0.0
 
 
 # ── Causal Analysis Subroutines ────────────────────────────────────
@@ -641,7 +451,7 @@ def _estimate_evidence_score(
     score = G.nodes[treatment].get("score", 0.0) if G.has_node(treatment) else 0.0
 
     # 1. Path-based strength
-    path_strength = _compute_path_strength(G, treatment, outcome)
+    path_strength = compute_path_strength(G, treatment, outcome)
 
     # 2. Adjustment set weight
     # Heuristic weight distinguishing targets with an adjustment set (1.0) from
@@ -680,40 +490,6 @@ def _estimate_evidence_score(
         evidence *= 1.5
 
     return evidence
-
-
-def _compute_path_strength(
-    G: nx.DiGraph, source: str, target: str,
-) -> float:
-    """Compute causal path strength from edge weights.
-
-    Shorter paths with higher-weight edges indicate stronger
-    causal mechanisms.
-    """
-    # Try directed path first
-    try:
-        path = nx.shortest_path(G, source, target)
-        if len(path) < 2:
-            return 0.0
-        # Product of edge weights along path
-        strength = 1.0
-        for i in range(len(path) - 1):
-            edata = G.get_edge_data(path[i], path[i + 1], {})
-            strength *= edata.get("weight", 0.5)
-        # Discount for path length (shorter = stronger)
-        strength *= 1.0 / len(path)
-        return strength
-    except (nx.NodeNotFound, nx.NetworkXNoPath):
-        pass
-
-    # Undirected fallback (weaker evidence)
-    try:
-        G_u = G.to_undirected()
-        path = nx.shortest_path(G_u, source, target)
-        strength = 0.5 / len(path)  # Halved for undirected
-        return strength
-    except (nx.NodeNotFound, nx.NetworkXNoPath):
-        return 0.1  # Minimal baseline
 
 
 def _sensitivity_analysis(
@@ -760,7 +536,7 @@ def _sensitivity_analysis(
             ]
             G_reduced.remove_edges_from(to_remove)
             try:
-                ps = _compute_path_strength(G_reduced, treatment, outcome)
+                ps = compute_path_strength(G_reduced, treatment, outcome)
                 node_score = G_reduced.nodes[treatment].get("score", 0.0) if G_reduced.has_node(treatment) else 0.0
                 source_effects.append(node_score * ps)
             except Exception:
@@ -808,340 +584,3 @@ def _sensitivity_analysis(
     robustness_scores.append(connectivity_robustness)
 
     return float(np.mean(robustness_scores))
-
-
-def _count_pathway_connections(G: nx.DiGraph, node_id: str) -> int:
-    """Count how many pathways this gene participates in."""
-    count = 0
-    if not G.has_node(node_id):
-        return 0
-    for _, target, data in G.edges(node_id, data=True):
-        if data.get("edge_type") == "participates_in":
-            count += 1
-    # Also check incoming
-    for source, _, data in G.in_edges(node_id, data=True):
-        if data.get("edge_type") == "participates_in":
-            count += 1
-    return count
-
-
-def _count_protein_interactions(G: nx.DiGraph, node_id: str) -> int:
-    """Count protein–protein interactions for this node."""
-    count = 0
-    if not G.has_node(node_id):
-        return 0
-    for _, _, data in G.edges(node_id, data=True):
-        if data.get("edge_type") == "interacts_with":
-            count += 1
-    for _, _, data in G.in_edges(node_id, data=True):
-        if data.get("edge_type") == "interacts_with":
-            count += 1
-    return count
-
-
-def _collect_source_scores(
-    graph: DiseaseGraph, gene_name: str,
-) -> dict[str, float]:
-    """Collect per-source association scores for a gene."""
-    scores: dict[str, float] = {}
-    for node in graph.nodes:
-        if node.name.upper() == gene_name.upper():
-            if node.source:
-                for src in node.source.split(", "):
-                    scores[src] = max(scores.get(src, 0.0), node.score)
-    return scores
-
-
-def _assess_druggability(node_data: dict[str, Any]) -> float:
-    """Score druggability based on available evidence.
-
-    Uses Open Targets tractability data when available,
-    structural information, and protein family heuristics.
-    """
-    score = 0.3  # Base
-
-    pdb_ids = node_data.get("pdb_ids", [])
-    if pdb_ids:
-        score += 0.2  # Has 3D structure
-
-    uniprot_id = node_data.get("uniprot_id", "")
-    if uniprot_id:
-        score += 0.1  # Well-characterised protein
-
-    # Open Targets tractability data (propagated from graph_builder)
-    metadata = node_data.get("metadata", {})
-    tractability = metadata.get("tractability", [])
-    if tractability:
-        for entry in tractability:
-            if isinstance(entry, dict) and entry.get("value"):
-                score += 0.15
-                break  # At least one modality is tractable
-
-    # UniProt druggability flag
-    if metadata.get("is_druggable"):
-        score += 0.15
-
-    # Protein family heuristic from description text
-    description = node_data.get("description", "").lower()
-    druggable_keywords = [
-        "receptor", "kinase", "protease", "enzyme", "channel",
-        "transporter", "gpcr", "nuclear receptor",
-    ]
-    if any(kw in description for kw in druggable_keywords):
-        score += 0.15
-
-    return min(1.0, score)
-
-
-def _compute_causal_confidence(
-    effect: float,
-    robustness: float,
-    is_identifiable: bool,
-    n_pathways: int,
-    n_interactions: int,
-    source_scores: dict[str, float],
-    druggability: float,
-    n_active_sources: int = 4,
-    n_associated_diseases: int = 0,
-) -> float:
-    """Compute composite causal confidence score.
-
-    Weights:
-    - Causal effect magnitude: 30%
-    - Robustness (sensitivity analysis): 25%
-    - Identifiability (backdoor criterion): 15%
-    - Multi-source consensus: 10%
-    - Disease specificity: 10%
-    - Druggability: 10%
-
-    Disease specificity replaces the former "network centrality"
-    weight.  Hub genes (TP53, AKT1) are associated with thousands
-    of diseases — they are generic, not specific.  Specificity
-    rewards targets that are uniquely linked to the disease under
-    study, penalising promiscuous hubs.
-
-    Formula: specificity = 1 / log2(n_diseases + 2)
-    - Gene linked to 1 disease:   specificity = 1.0
-    - Gene linked to 10 diseases: specificity = 0.29
-    - Gene linked to 100:         specificity = 0.15
-    - Gene linked to 1000:        specificity = 0.10
-    """
-    # Normalise effect to 0-1
-    effect_norm = min(1.0, effect)
-
-    # Multi-source consensus: more sources = higher
-    n_sources = len(source_scores)
-    avg_source_score = float(np.mean(list(source_scores.values()))) if source_scores else 0.0
-    consensus = min(1.0, (n_sources / max(1, n_active_sources)) * avg_source_score)
-
-    # Disease specificity — replaces network centrality
-    if n_associated_diseases > 0:
-        specificity = 1.0 / np.log2(n_associated_diseases + 2)
-    else:
-        # No data → neutral (0.5), neither reward nor penalise
-        specificity = 0.5
-
-    confidence = (
-        0.30 * effect_norm
-        + 0.25 * robustness
-        + 0.15 * (1.0 if is_identifiable else 0.0)
-        + 0.10 * consensus
-        + 0.10 * min(1.0, specificity)
-        + 0.10 * druggability
-    )
-
-    return round(min(1.0, max(0.0, confidence)), 4)
-
-
-def _classify_target(
-    gene_name: str,
-    causal_confidence: float,
-    robustness: float,
-    is_identifiable: bool,
-    n_pathways: int,
-    druggability: float,
-    target_type: TargetType = TargetType.CORRELATIONAL,
-    tissue_relevant: bool = True,
-    evidence_streams: int = 0,
-) -> tuple[TargetClassification, str]:
-    """Classify a target as causal, correlational, or inconclusive.
-
-    Classification rules:
-
-    **Automatic demotion** (overrides confidence scores):
-    - HOST_SYMPTOM targets → always CORRELATIONAL
-    - tissue_relevant=False → always CORRELATIONAL
-
-    **Tissue gate** (boolean, not a modifier):
-    - tissue_relevant is True/False from the tissue filter.
-    - True = gene is expressed in a disease-relevant tissue
-      (or expression unknown → pass).
-    - False = gene is only expressed in irrelevant tissues
-      → demoted to CORRELATIONAL regardless of confidence.
-    - The gate NEVER modifies causal_confidence.  Confidence
-      stays pure — it measures causal evidence quality, not
-      tissue expression.
-
-    **Evidence triangulation** (for CAUSAL status):
-    - Must have ≥2 independent evidence streams
-    - causal_confidence ≥ 0.6 AND robust AND identifiable
-
-    **Standard rules**:
-    - Correlational: confidence < 0.4 OR not robust
-    - Inconclusive: everything in between
-    """
-    reasons = []
-
-    # ── Biological overrides (before confidence check) ──────
-
-    # 1. Symptom markers are NEVER causal drug targets
-    if target_type == TargetType.HOST_SYMPTOM:
-        classification = TargetClassification.CORRELATIONAL
-        reasons.append(
-            f"⚠ {gene_name} classified as HOST_SYMPTOM: this gene "
-            f"encodes a receptor/channel associated with disease "
-            f"symptoms (e.g. seizures, pain), not with the disease "
-            f"mechanism itself. Targeting symptom markers does not "
-            f"treat the underlying disease."
-        )
-        reasons.append(
-            f"Confidence was {causal_confidence:.2f} but biological "
-            f"classification overrides statistical score."
-        )
-        return classification, " ".join(reasons)
-
-    # 2. Tissue gate — independent boolean criterion
-    #    If tissue_relevant is False, the gene is expressed only
-    #    in tissues unrelated to this disease.  Demote regardless
-    #    of how strong the statistical evidence looks.
-    if not tissue_relevant:
-        classification = TargetClassification.CORRELATIONAL
-        reasons.append(
-            f"⚠ {gene_name} FAILED tissue gate: expressed only in "
-            f"tissues not relevant to this disease. "
-            f"Confidence was {causal_confidence:.2f} but tissue "
-            f"expression does not support this target."
-        )
-        return classification, " ".join(reasons)
-
-    # ── Standard classification with evidence triangulation ──
-
-    # When evidence_streams is explicitly provided (>0), enforce
-    # the triangulation requirement.  When not provided (legacy
-    # callers using default of 0), fall back to the original
-    # thresholds for backward compatibility.
-    triangulation_ok = evidence_streams >= 2 or evidence_streams == 0
-
-    if (
-        causal_confidence >= 0.6
-        and robustness >= 0.4
-        and is_identifiable
-        and triangulation_ok
-    ):
-        classification = TargetClassification.CAUSAL
-        reasons.append(
-            f"{gene_name} has causal confidence {causal_confidence:.2f}, "
-            f"supported by {n_pathways} pathway(s), robustness score "
-            f"{robustness:.2f}, and {evidence_streams} independent "
-            f"evidence stream(s). Tissue gate: PASS."
-        )
-        if target_type in (TargetType.PATHOGEN_DIRECT, TargetType.HOST_INVASION):
-            reasons.append(
-                f"Target type {target_type.value}: this is a direct "
-                f"disease-mechanism target."
-            )
-        if druggability >= 0.5:
-            reasons.append(
-                f"Druggability score {druggability:.2f} indicates tractable "
-                f"target with known 3D structures."
-            )
-        reasons.append(
-            "Backdoor criterion satisfied: causal effect is identifiable "
-            "after adjusting for confounders."
-        )
-
-    elif causal_confidence < 0.4 or robustness < 0.3:
-        classification = TargetClassification.CORRELATIONAL
-        reasons.append(
-            f"{gene_name} is likely correlational (confidence={causal_confidence:.2f}, "
-            f"robustness={robustness:.2f})."
-        )
-        if not is_identifiable:
-            reasons.append(
-                "No valid causal path identified — association may be "
-                "due to confounding."
-            )
-        reasons.append(
-            "Sensitivity analysis suggests the association is fragile "
-            "and may not survive intervention."
-        )
-
-    elif evidence_streams > 0 and evidence_streams < 2 and causal_confidence >= 0.6:
-        # High confidence but insufficient independent evidence
-        classification = TargetClassification.INCONCLUSIVE
-        reasons.append(
-            f"{gene_name} has confidence {causal_confidence:.2f} but only "
-            f"{evidence_streams} evidence stream(s). ≥2 required for CAUSAL."
-        )
-
-    else:
-        classification = TargetClassification.INCONCLUSIVE
-        reasons.append(
-            f"{gene_name} has moderate evidence (confidence={causal_confidence:.2f}) "
-            f"but insufficient data for definitive classification."
-        )
-
-    return classification, " ".join(reasons)
-
-
-def _count_evidence_streams(
-    source_scores: dict[str, float],
-    n_pathways: int,
-    n_interactions: int,
-    node_data: dict[str, Any],
-) -> int:
-    """Count independent evidence streams supporting a target.
-
-    Evidence streams:
-    1. Gene-disease association databases (Monarch, OpenTargets)
-    2. Pathway membership (KEGG, Reactome)
-    3. Protein-protein interactions (STRING)
-    4. Structural data (PDB)
-    5. Druggability / functional annotation (UniProt)
-    6. Drug evidence (ChEMBL — validated drug targets)
-
-    Each counts as ONE stream even if multiple sources within
-    the category confirm it (e.g. both KEGG and Reactome = 1
-    pathway stream, not 2).
-    """
-    streams = 0
-
-    # Stream 1: Gene-disease association databases
-    assoc_sources = {"Monarch", "OpenTargets"}
-    if any(s in source_scores for s in assoc_sources):
-        streams += 1
-
-    # Stream 2: Pathway membership
-    if n_pathways > 0:
-        streams += 1
-
-    # Stream 3: Protein interactions
-    if n_interactions > 0:
-        streams += 1
-
-    # Stream 4: 3D structural data
-    pdb_ids = node_data.get("pdb_ids", [])
-    if pdb_ids:
-        streams += 1
-
-    # Stream 5: Functional annotation / druggability
-    metadata = node_data.get("metadata", {})
-    if metadata.get("is_druggable") or metadata.get("go_terms"):
-        streams += 1
-
-    # Stream 6: ChEMBL drug evidence
-    if metadata.get("chembl_drug_evidence_score") or "ChEMBL" in source_scores:
-        streams += 1
-
-    return streams
-
