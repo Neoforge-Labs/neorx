@@ -69,9 +69,12 @@ def generate_candidates_with_rl(
     # Train (the training loop collects molecules internally)
     agent.train()
 
-    # Extract best molecules from env's internal tracking
+    # Extract best molecules from env's internal tracking. Each target
+    # state records the per-objective scores _screen_molecule produced
+    # for its best molecule -- pass those through rather than the
+    # placeholders that used to stand in for them.
     all_candidates: list[ScoredCandidate] = []
-    for ts in env._target_states:
+    for ts in env._targets:
         if ts.best_smiles is not None and ts.best_score > 0.0:
             candidate = score_candidate(
                 smiles=ts.best_smiles,
@@ -81,9 +84,9 @@ def generate_candidates_with_rl(
                 if ts.target_idx < len(causal_only) else "",
                 causal_confidence=causal_only[ts.target_idx].causal_confidence
                 if ts.target_idx < len(causal_only) else 0.5,
-                binding_affinity=ts.best_score * -10.0,
-                qed_score=0.5,
-                sa_score=5.0,
+                binding_affinity=ts.best_objectives.get("binding", 0.0) * -10.0,
+                qed_score=ts.best_objectives.get("qed", 0.0),
+                sa_score=ts.best_objectives.get("sa", 0.0),
             )
             all_candidates.append(candidate)
 
