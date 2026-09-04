@@ -644,10 +644,10 @@ def _estimate_evidence_score(
     path_strength = _compute_path_strength(G, treatment, outcome)
 
     # 2. Adjustment set weight
-    # Distinguish targets with an adjustment set (1.2) from those without (0.8).
-    # This is a heuristic weight; identification is decided by
-    # find_adjustment_set, not here.
-    dsep_factor = 1.2 if adjustment_set else 0.8
+    # Heuristic weight distinguishing targets with an adjustment set (1.0) from
+    # those without (0.8). NOT a d-separation result; identification is decided
+    # by neorx.core.causal.backdoor.find_adjustment_set.
+    dsep_factor = 1.0 if adjustment_set else 0.8
 
     # 3. Topological importance (betweenness centrality)
     try:
