@@ -20,6 +20,7 @@ from neorx.experiments.__main__ import app as exp_app
 from neorx.genmol.__main__ import app as genmol_app
 from neorx.mirrorfold.__main__ import app as mirrorfold_app
 from neorx.molscreen.__main__ import app as molscreen_app
+from neorx.snapshots.__main__ import app as snapshot_app
 
 app = typer.Typer(
     name="neorx",
@@ -37,6 +38,7 @@ app.add_typer(causalbiorl_app, name="causalbiorl", help="Causal RL environments.
 app.add_typer(mirrorfold_app, name="mirrorfold", help="Mirror-image protein analysis.")
 app.add_typer(molscreen_app, name="molscreen", help="Drug-likeness screening.")
 app.add_typer(exp_app, name="exp", help="Recorded experiments.")
+app.add_typer(snapshot_app, name="snapshot", help="Build and inspect versioned source snapshots.")
 
 __all__ = ["app", "main"]
 
