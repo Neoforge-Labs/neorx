@@ -5,4 +5,10 @@ part of the installed wheel: these are this repository's experiments, not
 a library feature.
 """
 
-from experiments import causalbiorl_bench, figures, genmol_eval, neorx_7disease  # noqa: F401
+from experiments import (  # noqa: F401
+    causalbiorl_bench,
+    corpus_census,
+    figures,
+    genmol_eval,
+    neorx_7disease,
+)
