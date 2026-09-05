@@ -165,6 +165,19 @@ class DiseaseGraph(BaseModel):
     nodes: list[GraphNode] = Field(default_factory=list)
     edges: list[GraphEdge] = Field(default_factory=list)
     sources_queried: list[str] = Field(default_factory=list, description="Which databases were queried")
+    as_of: Optional[str] = Field(
+        None,
+        description=(
+            "The date this graph was built as of, or None for a live build. "
+            "When set, the sources feeding the causal subgraph -- Open "
+            "Targets and OmniPath -- were read from the release pinned to "
+            "that date rather than fetched live, and a gene node's score is "
+            "that release's genetic-evidence score rather than OpenTargets' "
+            "overall association score. Those are different quantities: a "
+            "consumer that pools dated and live graphs must read this field "
+            "first. See neorx.core.sources.snapshot_sources."
+        ),
+    )
     build_timestamp: datetime = Field(default_factory=datetime.now)
 
     @property

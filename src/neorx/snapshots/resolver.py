@@ -20,6 +20,10 @@ from __future__ import annotations
 
 from typing import Callable, Protocol
 
+import polars as pl
+
+from neorx.core.sources.snapshot_sources import snapshot_reader
+
 __all__ = ["SourceResolver", "UnpinnedSourceError"]
 
 # Sources whose data reaches the causal subgraph, and therefore must be
@@ -34,6 +38,10 @@ class UnpinnedSourceError(RuntimeError):
 
 class _Store(Protocol):
     def has(self, source: str, release: str) -> bool: ...
+
+    def associations(self, release: str) -> pl.DataFrame: ...
+
+    def interactions(self, release: str) -> pl.DataFrame: ...
 
 
 class SourceResolver:
@@ -57,6 +65,13 @@ class SourceResolver:
     def resolve(self, source: str, as_of: str | None) -> Callable[..., object]:
         """Return the reader for this source at this date.
 
+        Undated, or unpinned, this is the live client itself. Dated and
+        pinned, it is a snapshot reader bound to the release, returning
+        the same ``tuple[list[GraphNode], list[GraphEdge]]`` the live
+        client returns -- so the caller assembles a dated graph through
+        the same code path as a live one and cannot accidentally hold a
+        reader it does not know how to call.
+
         Raises ``UnpinnedSourceError`` if the date requires a snapshot that
         does not exist. It does not fall back to the live client.
         """
@@ -73,4 +88,4 @@ class SourceResolver:
                 f"evidence into a dated graph."
             )
 
-        return lambda: (source, release)
+        return snapshot_reader(source, self._store, release)

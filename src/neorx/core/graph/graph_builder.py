@@ -39,7 +39,8 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from functools import partial
+from typing import TYPE_CHECKING, Any
 
 import networkx as nx
 
@@ -62,7 +63,18 @@ from neorx.core.sources import (
     query_chembl,
 )
 from neorx.core.cache import get_cache, _cache_key, GRAPH_TTL
-from neorx.snapshots.resolver import SourceResolver
+
+if TYPE_CHECKING:
+    # `neorx.snapshots.resolver` imports `neorx.core.sources.snapshot_sources`,
+    # so that a dated run resolves to real snapshot readers rather than to a
+    # placeholder, and `neorx.core.__init__` imports this module. A runtime
+    # import here would make that dependency mutual. It does not currently
+    # fail -- `neorx/__init__` imports `neorx.core` first, so the resolver is
+    # always reached with `neorx.core.graph.models` already loaded -- but it
+    # would be a cycle held open by import order alone, and nothing here needs
+    # the name at runtime: `from __future__ import annotations` leaves the
+    # annotation a string.
+    from neorx.snapshots.resolver import SourceResolver
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +88,7 @@ def build_disease_graph(
     allow_mocks: bool = False,
     as_of: str | None = None,
     resolver: SourceResolver | None = None,
+    disease_id: str | None = None,
 ) -> DiseaseGraph:
     """Build a comprehensive causal knowledge graph for a disease.
 
@@ -96,20 +109,44 @@ def build_disease_graph(
     as_of : str | None
         A release date for a dated build. ``None`` (default) means
         undated, unchanged behaviour -- every source is queried live.
-        When set, requires ``resolver``.
+        When set, requires ``resolver`` and ``disease_id``.
     resolver : SourceResolver | None
         Resolves ``opentargets`` and ``omnipath`` -- the sources that
         feed the causal subgraph -- to their pinned snapshot for
         ``as_of``. Resolved before any fetching begins, so a missing
         snapshot is refused immediately rather than after minutes of
         work against the other sources. It will not fall back to live
-        data.
+        data, and on a dated build the live Open Targets and OmniPath
+        clients are not called at all.
+    disease_id : str | None
+        EFO disease id. Required when ``as_of`` is set: the extract is
+        keyed on EFO id and records no disease names, so a dated build
+        cannot look one up from the snapshot, and looking it up from the
+        API would put a live call inside a dated build. Undated, it is
+        optional and resolved from Open Targets as before.
 
     Returns
     -------
     DiseaseGraph
         Assembled graph with merged nodes and unified edges.
+
+    Dated builds and live builds are not interchangeable
+    ----------------------------------------------------
+    On a **live** build a gene node's ``score`` is OpenTargets' overall
+    association score: a harmonic sum over datasources, published by the
+    platform. On a **dated** build it is the maximum genetic-evidence
+    score in the pinned release, because the derived extract carries one
+    row per datatype and does not carry the overall score -- and
+    reconstructing it would mean putting a computed quantity where a
+    measurement belongs. Both are real numbers from Open Targets, but
+    they are *different quantities*: they must not be placed in the same
+    column of a table, ranked against each other, or pooled. The full
+    per-datatype breakdown is on both, in
+    ``metadata["datatype_scores"]``. See
+    ``neorx.core.sources.snapshot_sources``.
     """
+    ot_reader = None
+    omnipath_reader = None
     if as_of is not None:
         if resolver is None:
             raise ValueError(
@@ -117,12 +154,23 @@ def build_disease_graph(
                 "a dated run cannot be built without one to pin "
                 "opentargets and omnipath to that date's snapshot."
             )
-        # Resolve the pinned sources before any fetching begins. This
-        # is a fail-fast check, not a fallback -- a missing snapshot
-        # raises UnpinnedSourceError here rather than after the other
-        # six sources have already been queried.
-        resolver.resolve("opentargets", as_of)
-        resolver.resolve("omnipath", as_of)
+        if not disease_id:
+            raise ValueError(
+                f"build_disease_graph(as_of={as_of!r}) requires disease_id: "
+                f"the pinned extract is keyed on EFO id and records no "
+                f"disease names, so {disease!r} cannot be resolved from the "
+                f"snapshot, and resolving it from the Open Targets API "
+                f"would be a live call inside a dated build. Pass "
+                f"disease_id='EFO_...' (or the MONDO/Orphanet id the "
+                f"release uses)."
+            )
+        # Resolve the pinned sources before any fetching begins, so a
+        # missing snapshot raises UnpinnedSourceError here rather than
+        # after the other six sources have already been queried. These
+        # are the readers the build actually uses: on a dated build
+        # query_open_targets and query_omnipath are never called.
+        ot_reader = resolver.resolve("opentargets", as_of)
+        omnipath_reader = resolver.resolve("omnipath", as_of)
 
     # ── Check cache first ─────────────────────────────────────
     if use_cache:
@@ -130,7 +178,7 @@ def build_disease_graph(
         cache_key = _cache_key(
             "graph", disease=disease.lower(),
             max_genes=max_genes, string_min_score=string_min_score,
-            as_of=as_of,
+            as_of=as_of, disease_id=disease_id,
         )
         cached = cache.get(cache_key)
         if cached is not None:
@@ -145,21 +193,31 @@ def build_disease_graph(
     all_nodes: list[GraphNode] = []
     all_edges: list[GraphEdge] = []
     sources_queried: list[str] = []
-    disease_id: str | None = None
 
     # ── Step 1: Gene–Disease Associations (parallel) ──────────
 
-    logger.info("Querying Monarch + Open Targets for '%s' (parallel)…", disease)
+    if ot_reader is None:
+        ot_call = partial(
+            query_open_targets, disease,
+            max_results=max_genes, allow_mocks=allow_mocks,
+        )
+        logger.info("Querying Monarch + Open Targets for '%s' (parallel)…", disease)
+    else:
+        ot_call = partial(
+            ot_reader, disease,
+            disease_id=disease_id, max_results=max_genes,
+        )
+        logger.info(
+            "Querying Monarch live + Open Targets pinned at %s for '%s'…",
+            as_of, disease,
+        )
     with ThreadPoolExecutor(max_workers=2) as pool:
         mn_future = pool.submit(
             query_monarch, disease,
             max_results=max_genes,
             allow_mocks=allow_mocks,
         )
-        ot_future = pool.submit(
-            query_open_targets, disease, max_results=max_genes,
-            allow_mocks=allow_mocks,
-        )
+        ot_future = pool.submit(ot_call)
         mn_nodes, mn_edges = mn_future.result()
         ot_nodes, ot_edges = ot_future.result()
 
@@ -193,12 +251,15 @@ def build_disease_graph(
         len(chembl_nodes), n_pathogen, len(chembl_edges),
     )
 
-    # Resolve disease ontology ID from Open Targets
-    try:
-        from neorx.core.sources.open_targets import resolve_disease_id
-        disease_id = resolve_disease_id(disease)
-    except Exception:
-        pass
+    # Resolve disease ontology ID from Open Targets. A dated build was
+    # given one -- it had to be, the snapshot is keyed on it -- and must
+    # not make this live call.
+    if disease_id is None:
+        try:
+            from neorx.core.sources.open_targets import resolve_disease_id
+            disease_id = resolve_disease_id(disease)
+        except Exception:
+            pass
 
     # ── Step 2: Pathway Memberships ─────────────────────────────
 
@@ -234,10 +295,14 @@ def build_disease_graph(
 
     # ── Step 3b: Directed Regulatory Interactions ───────────────
 
-    logger.info("Querying OmniPath regulatory interactions…")
-    omni_nodes, omni_edges = query_omnipath(
-        gene_symbols, allow_mocks=allow_mocks,
-    )
+    if omnipath_reader is None:
+        logger.info("Querying OmniPath regulatory interactions…")
+        omni_nodes, omni_edges = query_omnipath(
+            gene_symbols, allow_mocks=allow_mocks,
+        )
+    else:
+        logger.info("Reading OmniPath regulatory interactions pinned at %s…", as_of)
+        omni_nodes, omni_edges = omnipath_reader(gene_symbols)
     all_nodes.extend(omni_nodes)
     all_edges.extend(omni_edges)
     sources_queried.append("OmniPath")
@@ -303,6 +368,7 @@ def build_disease_graph(
         nodes=merged_nodes,
         edges=merged_edges,
         sources_queried=sources_queried,
+        as_of=as_of,
     )
 
     logger.info(
