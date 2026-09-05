@@ -51,11 +51,14 @@ record, and are stated here rather than patched over:
   giving it one would be an invention. This matches
   ``neorx.snapshots.frame.candidate_frame``, which draws the dated run's
   candidate population by the same rule.
-* ``n_associated_diseases`` is absent. The live client reads it from the
-  OpenTargets API for the specificity penalty in
-  ``neorx.core.causal.scoring``; the extract does not record it, so the
-  key is omitted and the penalty is simply not applied, rather than a
-  stand-in count being fabricated to make one apply.
+* ``n_associated_diseases`` is counted from the extract rather than read
+  from the API. The live client asks OpenTargets how many diseases a
+  target is associated with, for the specificity penalty in
+  ``neorx.core.causal.scoring``; that answer is today's, which in a dated
+  build is the same anachronism as the overall score. Counting distinct
+  diseases per target within the release gives the number as it stood at
+  that date. It is a measurement of the pinned data, not a stand-in for
+  the API's value, and the two will not agree.
 """
 
 from __future__ import annotations
@@ -109,9 +112,28 @@ def open_targets_from_snapshot(
     extract does not carry. See the module docstring: the two are
     different quantities and must not be tabulated together.
     """
-    rows = store.associations(release).filter(pl.col("disease_id") == disease_id)
+    associations = store.associations(release)
+    rows = associations.filter(pl.col("disease_id") == disease_id)
     if rows.height == 0:
         return [], []
+
+    # How many diseases each target is associated with in this release.
+    # Counted over every datatype, because the live client's count is over
+    # every association rather than the genetic ones alone, and this is the
+    # quantity standing in that slot. Counted release-wide, not within the
+    # disease being built -- specificity is precisely a statement about the
+    # rest of the release.
+    n_diseases = dict(
+        associations
+        .select(
+            pl.col("target_symbol").str.strip_chars().alias("symbol"),
+            pl.col("disease_id"),
+        )
+        .filter(pl.col("symbol").is_not_null() & (pl.col("symbol") != ""))
+        .group_by("symbol")
+        .agg(pl.col("disease_id").n_unique().alias("n"))
+        .iter_rows()
+    )
 
     # Full per-datatype breakdown, exactly as the live path records it.
     # Two Ensembl ids occasionally share an approved symbol; the graph
@@ -161,6 +183,10 @@ def open_targets_from_snapshot(
                 "ensembl_id": ensembl_ids[symbol],
                 "datatype_scores": dt_scores,
                 "has_known_drug": dt_scores.get("known_drug", 0.0) > 0.0,
+                # Indexed, not .get(symbol, 0): every ranked symbol came
+                # from a row of this same frame, so a miss is a real
+                # inconsistency and a fabricated 0 would hide it.
+                "n_associated_diseases": n_diseases[symbol],
                 "snapshot_release": release,
                 "score_is": "max genetic-evidence score in this release",
             },

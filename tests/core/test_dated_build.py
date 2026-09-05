@@ -105,15 +105,20 @@ def _write_snapshot(root):
     pl.DataFrame(
         {
             "target_id": ["ENSG0000001", "ENSG0000001", "ENSG0000002",
-                          "ENSG0000003"],
-            "target_symbol": ["CCR5", "CCR5", "CXCR4", "LITONLY"],
-            "disease_id": [DISEASE_ID] * 4,
+                          "ENSG0000003", "ENSG0000001"],
+            "target_symbol": ["CCR5", "CCR5", "CXCR4", "LITONLY", "CCR5"],
+            # The last row is a DIFFERENT disease. It must not reach the
+            # graph -- the build filters to DISEASE_ID -- but it must
+            # reach CCR5's n_associated_diseases, which is a statement
+            # about the release rather than about this disease.
+            "disease_id": [DISEASE_ID] * 4 + ["EFO_0000000"],
             # CCR5 carries both a genetic and a non-genetic datatype, so
             # the breakdown has something to preserve and the node score
             # has something to pick out of it.
             "datatype": ["genetic_association", "known_drug",
-                         "somatic_mutation", "literature"],
-            "score": [0.75, 0.90, 0.40, 0.99],
+                         "somatic_mutation", "literature",
+                         "genetic_association"],
+            "score": [0.75, 0.90, 0.40, 0.99, 0.60],
         },
         schema=ASSOCIATION_COLUMNS,
     ).write_parquet(associations / "associations.parquet")
@@ -273,6 +278,36 @@ def test_the_node_score_is_the_releases_genetic_score_not_an_overall_score(
         "genetic_association": 0.75, "known_drug": 0.90,
     }
     assert ccr5.metadata["has_known_drug"] is True
+
+
+def test_n_associated_diseases_counts_the_release_not_this_disease(
+    tmp_path, monkeypatch
+):
+    # CCR5 is associated with two diseases in the extract, CXCR4 with one.
+    # The build is for one of them, so a count taken from the filtered
+    # rows would report 1 for both and the specificity penalty would stop
+    # discriminating. It is counted release-wide, which is what
+    # specificity means.
+    graph, _calls = _dated_build(tmp_path, monkeypatch)
+    counts = {
+        n.name: n.metadata["n_associated_diseases"]
+        for n in graph.nodes
+        if n.node_type == NodeType.GENE
+    }
+    assert counts["CCR5"] == 2
+    assert counts["CXCR4"] == 1
+
+
+def test_the_other_diseases_rows_do_not_reach_the_graph(tmp_path, monkeypatch):
+    # The same row that lifts CCR5's count to 2 carries a 0.60 genetic
+    # score for another disease. The node score must stay 0.75 -- the
+    # count reads the release, the evidence reads this disease.
+    graph, _calls = _dated_build(tmp_path, monkeypatch)
+    ccr5 = next(n for n in graph.nodes if n.name == "CCR5")
+    assert ccr5.score == pytest.approx(0.75)
+    assert ccr5.metadata["datatype_scores"] == {
+        "genetic_association": 0.75, "known_drug": 0.90,
+    }
 
 
 def test_a_target_without_genetic_evidence_is_not_given_an_invented_score(
