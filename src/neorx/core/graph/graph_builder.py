@@ -44,6 +44,11 @@ from typing import TYPE_CHECKING, Any
 
 import networkx as nx
 
+from neorx.core.graph.dated_frame import (
+    frame_symbols,
+    is_pinned,
+    restrict_to_frame,
+)
 from neorx.core.graph.models import (
     DiseaseGraph,
     GraphNode,
@@ -144,6 +149,17 @@ def build_disease_graph(
     per-datatype breakdown is on both, in
     ``metadata["datatype_scores"]``. See
     ``neorx.core.sources.snapshot_sources``.
+
+    The gene node population of a dated build is the frame
+    ----------------------------------------------------
+    The unpinned sources stay live on a dated build, because their edges
+    are not causal-admissible and identification filters them out. Their
+    *nodes* are another matter, and on a dated build they are restricted
+    to the pinned release's own gene population -- they may enrich a node
+    the release put in the graph, never introduce one, never overwrite a
+    pinned score or a pinned node's metadata, and never take a place in
+    the ``max_genes`` cap. See ``neorx.core.graph.dated_frame`` for what
+    each of those channels does when it is left open.
     """
     ot_reader = None
     omnipath_reader = None
@@ -194,6 +210,26 @@ def build_disease_graph(
     all_edges: list[GraphEdge] = []
     sources_queried: list[str] = []
 
+    # Filled once the pinned reader has run: on a dated build its node set
+    # is the frame, and every unpinned source is restricted to it. ``None``
+    # on an undated build, where no source is restricted.
+    frame: frozenset[str] | None = None
+    dropped_by_source: dict[str, list[str]] = {}
+
+    def admit(
+        source_name: str,
+        nodes: list[GraphNode],
+        edges: list[GraphEdge],
+    ) -> tuple[list[GraphNode], list[GraphEdge]]:
+        """Take an unpinned source's contribution into the build."""
+        if frame is not None:
+            nodes, edges, dropped = restrict_to_frame(nodes, edges, frame)
+            if dropped:
+                dropped_by_source.setdefault(source_name, []).extend(dropped)
+        all_nodes.extend(nodes)
+        all_edges.extend(edges)
+        return nodes, edges
+
     # ── Step 1: Gene–Disease Associations (parallel) ──────────
 
     if ot_reader is None:
@@ -221,15 +257,23 @@ def build_disease_graph(
         mn_nodes, mn_edges = mn_future.result()
         ot_nodes, ot_edges = ot_future.result()
 
-    all_nodes.extend(mn_nodes)
-    all_edges.extend(mn_edges)
-    sources_queried.append("Monarch")
-    logger.info("  Monarch: %d nodes, %d edges.", len(mn_nodes), len(mn_edges))
-
+    # Open Targets goes in first on a dated build, because it *is* the
+    # frame: nothing else may add a gene the pinned release did not.
     all_nodes.extend(ot_nodes)
     all_edges.extend(ot_edges)
     sources_queried.append("OpenTargets")
     logger.info("  Open Targets: %d nodes, %d edges.", len(ot_nodes), len(ot_edges))
+
+    if ot_reader is not None:
+        frame = frame_symbols(ot_nodes)
+        logger.info(
+            "Dated build frame: %d genes from the pinned release. Unpinned "
+            "sources may enrich them and may not add to them.", len(frame),
+        )
+
+    mn_nodes, mn_edges = admit("Monarch", mn_nodes, mn_edges)
+    sources_queried.append("Monarch")
+    logger.info("  Monarch: %d nodes, %d edges.", len(mn_nodes), len(mn_edges))
 
     # ── Step 1b: ChEMBL Drug Targets (local SQLite) ────────────
 
@@ -238,8 +282,7 @@ def build_disease_graph(
         disease, max_results=max_genes * 3,
         allow_mocks=allow_mocks,
     )
-    all_nodes.extend(chembl_nodes)
-    all_edges.extend(chembl_edges)
+    chembl_nodes, chembl_edges = admit("ChEMBL", chembl_nodes, chembl_edges)
     if chembl_nodes:
         sources_queried.append("ChEMBL")
     n_pathogen = sum(
@@ -268,28 +311,30 @@ def build_disease_graph(
                 len(gene_symbols), max_genes)
 
     logger.info("Querying KEGG pathways…")
-    kegg_nodes, kegg_edges = query_kegg_pathways(gene_symbols, allow_mocks=allow_mocks)
-    all_nodes.extend(kegg_nodes)
-    all_edges.extend(kegg_edges)
+    kegg_nodes, kegg_edges = admit(
+        "KEGG", *query_kegg_pathways(gene_symbols, allow_mocks=allow_mocks),
+    )
     sources_queried.append("KEGG")
     logger.info("  KEGG: %d nodes, %d edges.", len(kegg_nodes), len(kegg_edges))
 
     logger.info("Querying Reactome pathways…")
-    react_nodes, react_edges = query_reactome_pathways(gene_symbols, allow_mocks=allow_mocks)
-    all_nodes.extend(react_nodes)
-    all_edges.extend(react_edges)
+    react_nodes, react_edges = admit(
+        "Reactome",
+        *query_reactome_pathways(gene_symbols, allow_mocks=allow_mocks),
+    )
     sources_queried.append("Reactome")
     logger.info("  Reactome: %d nodes, %d edges.", len(react_nodes), len(react_edges))
 
     # ── Step 3: Protein–Protein Interactions ────────────────────
 
     logger.info("Querying STRING interactions…")
-    string_nodes, string_edges = query_string_interactions(
-        gene_symbols, min_score=string_min_score,
-        allow_mocks=allow_mocks,
+    string_nodes, string_edges = admit(
+        "STRING",
+        *query_string_interactions(
+            gene_symbols, min_score=string_min_score,
+            allow_mocks=allow_mocks,
+        ),
     )
-    all_nodes.extend(string_nodes)
-    all_edges.extend(string_edges)
     sources_queried.append("STRING")
     logger.info("  STRING: %d nodes, %d edges.", len(string_nodes), len(string_edges))
 
@@ -303,10 +348,30 @@ def build_disease_graph(
     else:
         logger.info("Reading OmniPath regulatory interactions pinned at %s…", as_of)
         omni_nodes, omni_edges = omnipath_reader(gene_symbols)
-    all_nodes.extend(omni_nodes)
-    all_edges.extend(omni_edges)
+    if omnipath_reader is None:
+        omni_nodes, omni_edges = admit("OmniPath", omni_nodes, omni_edges)
+    else:
+        # Pinned: it is not an unpinned source and is not restricted. It
+        # only ever saw frame symbols, because ``gene_symbols`` is drawn
+        # from a node population that is already the frame.
+        all_nodes.extend(omni_nodes)
+        all_edges.extend(omni_edges)
     sources_queried.append("OmniPath")
     logger.info("  OmniPath: %d directed edges.", len(omni_edges))
+
+    if frame is not None and dropped_by_source:
+        n_dropped = sum(len(names) for names in dropped_by_source.values())
+        logger.info(
+            "Dated build of '%s' as of %s: dropped %d off-frame gene node(s) "
+            "from unpinned sources (%s). The pinned release's %d genes are "
+            "the population; an unpinned source may not add to it.",
+            disease, as_of, n_dropped,
+            ", ".join(
+                f"{source}: {len(names)} ({', '.join(sorted(set(names)))})"
+                for source, names in sorted(dropped_by_source.items())
+            ),
+            len(frame),
+        )
 
     # ── Step 4: UniProt Enrichment ──────────────────────────────
 
@@ -574,6 +639,24 @@ def _merge_nodes(
     When the same gene appears from multiple sources (Monarch
     and Open Targets both report CCR5), we keep the entry with
     the highest score and merge metadata.
+
+    A node read from a pinned release is the exception, and it is not an
+    exception this function is told about: the fact rides on the node, in
+    ``metadata["snapshot_release"]`` (see
+    ``neorx.core.graph.dated_frame.is_pinned``). Such a node keeps its
+    score and every metadata key the snapshot reader wrote, whatever a
+    live source reports. A live source may still *add* keys the pinned
+    node does not carry -- that is enrichment, and it is the whole reason
+    the unpinned sources are still queried on a dated build -- but
+    ``0.85`` from Monarch may not become the release's genetic score, and
+    ``has_known_drug`` from today's ChEMBL may not become the release's
+    answer about known drugs. On an undated build no node is pinned and
+    the behaviour is exactly what it was.
+
+    Sources are still unioned onto a pinned node's ``source`` string.
+    That is a record of corroboration, not an overwrite: the score
+    ``collect_source_scores`` then attributes to Monarch is the pinned
+    node's own.
     """
     merged: dict[str, GraphNode] = {}
 
@@ -581,9 +664,26 @@ def _merge_nodes(
         key = node.node_id
         if key in merged:
             existing = merged[key]
-            # Keep highest score
-            if node.score > existing.score:
+            existing_pinned = is_pinned(existing)
+            incoming_pinned = is_pinned(node)
+
+            if existing_pinned and not incoming_pinned:
+                # Enrichment only: add what the release does not say,
+                # change nothing it does.
+                for meta_key, value in node.metadata.items():
+                    existing.metadata.setdefault(meta_key, value)
+            elif incoming_pinned and not existing_pinned:
+                # The pinned node arrived second (Monarch is queried
+                # first). The release's answer replaces the live one.
                 existing.score = node.score
+                existing.metadata.update(node.metadata)
+            else:
+                # Keep highest score
+                if node.score > existing.score:
+                    existing.score = node.score
+                # Merge metadata
+                existing.metadata.update(node.metadata)
+
             # Merge UniProt
             if node.uniprot_id and not existing.uniprot_id:
                 existing.uniprot_id = node.uniprot_id
@@ -592,13 +692,15 @@ def _merge_nodes(
             for pid in node.pdb_ids:
                 if pid not in existing_pdb:
                     existing.pdb_ids.append(pid)
-            # Merge metadata
-            existing.metadata.update(node.metadata)
             # Record multiple sources
             if node.source and node.source not in existing.source:
                 existing.source = f"{existing.source}, {node.source}"
         else:
-            merged[key] = node.model_copy()
+            # Deep, so that merging into the copy cannot reach back into
+            # the source node's own metadata dict -- which is exactly what
+            # a shallow copy shares, and what makes "the pinned node keeps
+            # its metadata" true by accident rather than by construction.
+            merged[key] = node.model_copy(deep=True)
 
     # Deduplicate edges
     seen_edges: set[tuple[str, str, str]] = set()

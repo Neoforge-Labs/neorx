@@ -38,8 +38,24 @@ RELEASE = "18.06"
 # Genes that exist only in the snapshot, and genes that exist only in the
 # live clients. A dated build must contain the first and none of the
 # second.
-SNAPSHOT_GENES = ("CCR5", "CXCR4")
+SNAPSHOT_GENES = ("CCR5", "CXCR4", "CONFND")
 LIVE_ONLY_GENE = "TODAYONLY"
+
+# The gene the release names as a regulator of CCR5. It is in the frame,
+# so it is the confounder the backdoor search has to adjust for, and the
+# undisturbed verdict on CCR5 is `identifiable_by_adjustment` rather than
+# the trivial one.
+CONFOUNDER_GENE = "CONFND"
+
+# Genes no unpinned source may put into a dated graph. LIVE_BRIDGE_GENE is
+# the dangerous one: the pinned OmniPath extract *does* know it -- OmniPath
+# is not disease-scoped -- so admitting the live node hands the snapshot
+# reader a symbol that closes a regulatory cycle through CCR5 that the
+# release, read on its own terms for this disease, does not contain.
+LIVE_BRIDGE_GENE = "LIVEBRIDGE"
+LIVE_EXTRA_GENES = ("LIVEX1", "LIVEX2")
+
+DISEASE_NODE_ID = f"disease:{DISEASE.lower().replace(' ', '_')}"
 
 
 def _graph_with_an_off_frame_gene():
@@ -105,36 +121,45 @@ def _write_snapshot(root):
     pl.DataFrame(
         {
             "target_id": ["ENSG0000001", "ENSG0000001", "ENSG0000002",
-                          "ENSG0000003", "ENSG0000001"],
-            "target_symbol": ["CCR5", "CCR5", "CXCR4", "LITONLY", "CCR5"],
-            # The last row is a DIFFERENT disease. It must not reach the
+                          "ENSG0000003", "ENSG0000001", "ENSG0000004"],
+            "target_symbol": ["CCR5", "CCR5", "CXCR4", "LITONLY", "CCR5",
+                              CONFOUNDER_GENE],
+            # The fifth row is a DIFFERENT disease. It must not reach the
             # graph -- the build filters to DISEASE_ID -- but it must
             # reach CCR5's n_associated_diseases, which is a statement
             # about the release rather than about this disease.
-            "disease_id": [DISEASE_ID] * 4 + ["EFO_0000000"],
+            "disease_id": [DISEASE_ID] * 4 + ["EFO_0000000", DISEASE_ID],
             # CCR5 carries both a genetic and a non-genetic datatype, so
             # the breakdown has something to preserve and the node score
             # has something to pick out of it.
             "datatype": ["genetic_association", "known_drug",
                          "somatic_mutation", "literature",
-                         "genetic_association"],
-            "score": [0.75, 0.90, 0.40, 0.99, 0.60],
+                         "genetic_association", "genetic_association"],
+            "score": [0.75, 0.90, 0.40, 0.99, 0.60, 0.55],
         },
         schema=ASSOCIATION_COLUMNS,
     ).write_parquet(associations / "associations.parquet")
 
     interactions = root / "omnipath" / RELEASE
     interactions.mkdir(parents=True, exist_ok=True)
+    # OmniPath is not disease-scoped: the extract carries regulatory
+    # interactions for every gene in the release, LIVE_BRIDGE_GENE
+    # included. Which of them reach a dated graph is decided entirely by
+    # the symbol list the builder hands the reader, which is why that list
+    # is the thing under test.
     pl.DataFrame(
         {
-            "source_symbol": ["CCR5"],
-            "target_symbol": ["CXCR4"],
-            "is_directed": [True],
-            "consensus_direction": [True],
-            "is_stimulation": [False],
-            "is_inhibition": [True],
-            "primary_sources": ["SIGNOR;TRRUST"],
-            "references": ["SIGNOR:11111;TRRUST:22222"],
+            "source_symbol": ["CCR5", CONFOUNDER_GENE, "CXCR4",
+                              LIVE_BRIDGE_GENE],
+            "target_symbol": ["CXCR4", "CCR5", LIVE_BRIDGE_GENE, "CCR5"],
+            "is_directed": [True] * 4,
+            "consensus_direction": [True] * 4,
+            "is_stimulation": [False, True, True, True],
+            "is_inhibition": [True, False, False, False],
+            "primary_sources": ["SIGNOR;TRRUST", "SIGNOR", "SIGNOR",
+                                "SIGNOR"],
+            "references": ["SIGNOR:11111;TRRUST:22222", "SIGNOR:33333",
+                           "SIGNOR:44444", "SIGNOR:55555"],
         },
         schema=INTERACTION_COLUMNS,
     ).write_parquet(interactions / "interactions.parquet")
@@ -153,17 +178,85 @@ def _make_resolver(root):
     )
 
 
-def _stub_sources(monkeypatch):
+def _live_monarch_pair():
+    """What live Monarch returns when it is allowed to contribute.
+
+    One frame gene at Monarch's flat causal score of 0.85 -- above CCR5's
+    pinned 0.75, so an unprotected merge takes it -- and three genes the
+    release does not associate with this disease at all. The edges carry
+    no ``evidence_class``, exactly as ``neorx.core.sources.monarch`` emits
+    them: the *edges* were never the leak, the nodes were.
+    """
+    nodes, edges = [], []
+    for gene in ("CCR5", LIVE_BRIDGE_GENE, *LIVE_EXTRA_GENES):
+        node_id = f"gene:{gene}"
+        nodes.append(GraphNode(
+            node_id=node_id, name=gene, node_type=NodeType.GENE,
+            source="Monarch", score=0.85,
+            metadata={
+                "mondo_id": "MONDO:0005109",
+                "hgnc_id": f"HGNC:{gene}",
+                "association_type": "causal",
+                "provenance": "Monarch",
+            },
+        ))
+        edges.append(GraphEdge(
+            source_id=node_id, target_id=DISEASE_NODE_ID,
+            edge_type=EdgeType.ASSOCIATED_WITH, weight=0.85,
+            source_db="Monarch", evidence="Causal association",
+        ))
+    return nodes, edges
+
+
+def _live_chembl_pair():
+    """What live ChEMBL returns when it is allowed to contribute.
+
+    CXCR4 is the frame gene here, and it is the one that shows the
+    provenance leak: the release gives it a somatic-mutation score of 0.40
+    and no known drug, while ChEMBL -- whose score is 60% of *today's*
+    ``max_phase`` -- reports 0.88 and ``has_known_drug`` True. Both the
+    score and the flag are statements about today's clinic, which is the
+    outcome a dated build exists to predict.
+    """
+    node = GraphNode(
+        node_id="gene:CXCR4", name="CXCR4", node_type=NodeType.GENE,
+        source="ChEMBL", score=0.88,
+        metadata={
+            "chembl_target_id": "CHEMBL2107",
+            "chembl_drug_evidence_score": 0.88,
+            "clinical_phase": 4,
+            "has_known_drug": True,
+            "is_druggable": True,
+            "is_pathogen_target": False,
+        },
+    )
+    edge = GraphEdge(
+        source_id=node.node_id, target_id=DISEASE_NODE_ID,
+        edge_type=EdgeType.ASSOCIATED_WITH, weight=0.88,
+        source_db="ChEMBL", evidence="ChEMBL max_phase 4",
+    )
+    return [node], [edge]
+
+
+def _stub_sources(monkeypatch, *, live_nodes=False):
     """Replace every network-backed source call with an instant stub.
 
     Open Targets and OmniPath emit a sentinel gene that exists nowhere in
     the snapshot, so a dated build that reached them is detectable in the
     graph itself and not only in a call counter. Returns the counters.
+
+    ``live_nodes`` switches on the configuration this file previously
+    could not express: Monarch and ChEMBL *contributing nodes*, which is
+    what they do on every real dated run. With it off they return
+    ``[], []`` and the leak the pinning rule closes cannot occur, which is
+    the condition the earlier version of this file established before
+    checking that the leak had not occurred.
     """
     import neorx.core.graph.graph_builder as graph_builder
     import neorx.core.sources.open_targets as open_targets_module
 
-    calls = {"n": 0, "open_targets": 0, "omnipath": 0}
+    calls = {"n": 0, "open_targets": 0, "omnipath": 0,
+             "omnipath_gene_lists": []}
 
     def _empty_pair(*_args, **_kwargs):
         calls["n"] += 1
@@ -197,9 +290,23 @@ def _stub_sources(monkeypatch):
             evidence_class="regulatory", sign=1,
         )]
 
-    monkeypatch.setattr(graph_builder, "query_monarch", _empty_pair)
+    def _live_monarch(*_args, **_kwargs):
+        calls["n"] += 1
+        return _live_monarch_pair()
+
+    def _live_chembl(*_args, **_kwargs):
+        calls["n"] += 1
+        return _live_chembl_pair()
+
+    monkeypatch.setattr(
+        graph_builder, "query_monarch",
+        _live_monarch if live_nodes else _empty_pair,
+    )
     monkeypatch.setattr(graph_builder, "query_open_targets", _live_open_targets)
-    monkeypatch.setattr(graph_builder, "query_chembl", _empty_pair)
+    monkeypatch.setattr(
+        graph_builder, "query_chembl",
+        _live_chembl if live_nodes else _empty_pair,
+    )
     monkeypatch.setattr(graph_builder, "query_kegg_pathways", _empty_pair)
     monkeypatch.setattr(graph_builder, "query_reactome_pathways", _empty_pair)
     monkeypatch.setattr(graph_builder, "query_string_interactions", _empty_pair)
@@ -221,14 +328,42 @@ def _fresh_cache(tmp_path, monkeypatch):
     return cache
 
 
-def _dated_build(tmp_path, monkeypatch):
+class _RecordingResolver:
+    """A resolver that records the symbol list the OmniPath reader is given.
+
+    Wrapping the resolved reader rather than mocking it keeps the real
+    snapshot read in the path -- what is recorded is exactly what the
+    parquet was queried with.
+    """
+
+    def __init__(self, inner, gene_lists):
+        self._inner = inner
+        self._gene_lists = gene_lists
+
+    def resolve(self, source, as_of):
+        reader = self._inner.resolve(source, as_of)
+        if source != "omnipath":
+            return reader
+
+        def recording(gene_symbols):
+            self._gene_lists.append(list(gene_symbols))
+            return reader(gene_symbols)
+
+        return recording
+
+
+def _dated_build(tmp_path, monkeypatch, *, live_nodes=False, max_genes=20):
     from neorx.core.graph.graph_builder import build_disease_graph
 
-    calls = _stub_sources(monkeypatch)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    calls = _stub_sources(monkeypatch, live_nodes=live_nodes)
     _fresh_cache(tmp_path, monkeypatch)
-    resolver = _make_resolver(tmp_path / "snapshots")
+    resolver = _RecordingResolver(
+        _make_resolver(tmp_path / "snapshots"), calls["omnipath_gene_lists"],
+    )
     graph = build_disease_graph(
         DISEASE, as_of="2018-06", resolver=resolver, disease_id=DISEASE_ID,
+        max_genes=max_genes,
     )
     return graph, calls
 
@@ -319,16 +454,22 @@ def test_a_target_without_genetic_evidence_is_not_given_an_invented_score(
     assert "LITONLY" not in {n.name for n in graph.nodes}
 
 
-def test_the_dated_omnipath_edge_comes_from_the_snapshot(tmp_path, monkeypatch):
+def test_the_dated_omnipath_edges_come_from_the_snapshot(tmp_path, monkeypatch):
     graph, _calls = _dated_build(tmp_path, monkeypatch)
     regulatory = [e for e in graph.edges if e.source_db == "OmniPath"]
-    assert [(e.source_id, e.target_id) for e in regulatory] == [
-        ("gene:CCR5", "gene:CXCR4")
+    # Exactly the interactions among the release's own genes for this
+    # disease. The extract also holds CXCR4 -> LIVEBRIDGE and
+    # LIVEBRIDGE -> CCR5; neither may appear, because LIVEBRIDGE is not
+    # one of those genes.
+    assert sorted((e.source_id, e.target_id) for e in regulatory) == [
+        ("gene:CCR5", "gene:CXCR4"),
+        (f"gene:{CONFOUNDER_GENE}", "gene:CCR5"),
     ]
-    assert regulatory[0].edge_type == EdgeType.INHIBITS
-    assert regulatory[0].sign == -1
-    assert regulatory[0].primary_sources == ["SIGNOR", "TRRUST"]
-    assert regulatory[0].pmids == ["11111", "22222"]
+    inhibition = next(e for e in regulatory if e.target_id == "gene:CXCR4")
+    assert inhibition.edge_type == EdgeType.INHIBITS
+    assert inhibition.sign == -1
+    assert inhibition.primary_sources == ["SIGNOR", "TRRUST"]
+    assert inhibition.pmids == ["11111", "22222"]
 
 
 def test_the_graph_records_the_date_it_was_built_as_of(tmp_path, monkeypatch):
@@ -446,3 +587,154 @@ def test_a_dated_build_hits_its_own_cache(tmp_path, monkeypatch):
     assert calls["n"] == after_first
     # A cached dated graph must still say it is dated.
     assert second.as_of == first.as_of == "2018-06"
+
+
+# ── With the unpinned sources actually contributing nodes ───────────
+#
+# Everything above this line runs with Monarch and ChEMBL stubbed to
+# ``[], []``. That is the configuration in which the pinning rule cannot
+# be violated, so it cannot detect a violation either. Below, they
+# contribute what they contribute on a real dated run: frame genes at
+# scores drawn from today, and genes the release never associated with
+# this disease.
+
+
+def _identification(graph, gene):
+    """The identification verdict on ``gene`` in an assembled graph."""
+    from neorx.core.causal.backdoor import find_adjustment_set
+    from neorx.core.graph.graph_builder import disease_graph_to_networkx
+
+    return find_adjustment_set(
+        disease_graph_to_networkx(graph), f"gene:{gene}", DISEASE_NODE_ID,
+    )
+
+
+def test_live_nodes_do_not_change_an_identifiability_verdict(
+    tmp_path, monkeypatch
+):
+    """The verdict is the predictor the research programme tests.
+
+    Two builds of the same disease, at the same date, against byte-identical
+    snapshots. The only difference is whether the unpinned sources are
+    allowed to contribute nodes. If that changes the verdict, then what a
+    dated run reports about 2018 depends on what Monarch says today, and
+    the temporal holdout is not one.
+    """
+    pinned_only, _ = _dated_build(tmp_path / "pinned-only", monkeypatch)
+    with_live, _ = _dated_build(
+        tmp_path / "with-live", monkeypatch, live_nodes=True,
+    )
+
+    quiet = _identification(pinned_only, "CCR5")
+    loud = _identification(with_live, "CCR5")
+
+    # Stated absolutely as well as relatively: an equality assertion alone
+    # would pass if both builds broke in the same way.
+    assert quiet.identifiable is True
+    assert quiet.reason.value == "identifiable_by_adjustment"
+    assert quiet.adjustment_set == (f"gene:{CONFOUNDER_GENE}",)
+
+    assert loud.identifiable == quiet.identifiable
+    assert loud.reason == quiet.reason
+    assert loud.adjustment_set == quiet.adjustment_set
+
+
+def test_a_live_gene_outside_the_frame_does_not_become_a_node(
+    tmp_path, monkeypatch
+):
+    graph, _calls = _dated_build(tmp_path, monkeypatch, live_nodes=True)
+    names = {n.name for n in graph.nodes}
+    for gene in (LIVE_BRIDGE_GENE, *LIVE_EXTRA_GENES):
+        assert gene not in names
+    # And no edge is left pointing at a node that is not there.
+    node_ids = {n.node_id for n in graph.nodes}
+    for edge in graph.edges:
+        assert edge.source_id in node_ids
+        assert edge.target_id in node_ids
+
+
+def test_the_frame_genes_still_arrive_when_live_sources_are_active(
+    tmp_path, monkeypatch
+):
+    """The rule restricts the population; it does not empty it."""
+    graph, _calls = _dated_build(tmp_path, monkeypatch, live_nodes=True)
+    names = {n.name for n in graph.nodes}
+    for gene in SNAPSHOT_GENES:
+        assert gene in names
+
+
+def test_a_live_source_cannot_raise_a_pinned_nodes_score(tmp_path, monkeypatch):
+    # Monarch reports CCR5 at its flat 0.85, above the release's 0.75.
+    graph, _calls = _dated_build(tmp_path, monkeypatch, live_nodes=True)
+    ccr5 = next(n for n in graph.nodes if n.name == "CCR5")
+    assert ccr5.score == pytest.approx(0.75)
+    assert ccr5.metadata["score_is"] == (
+        "max genetic-evidence score in this release"
+    )
+    assert ccr5.metadata["snapshot_release"] == RELEASE
+    assert ccr5.metadata["datatype_scores"] == {
+        "genetic_association": 0.75, "known_drug": 0.90,
+    }
+
+
+def test_a_live_source_cannot_overwrite_pinned_provenance(tmp_path, monkeypatch):
+    # ChEMBL reports CXCR4 at 0.88 with has_known_drug True, both derived
+    # from today's max_phase. The release says 0.40, somatic mutation
+    # only, no known drug.
+    graph, _calls = _dated_build(tmp_path, monkeypatch, live_nodes=True)
+    cxcr4 = next(n for n in graph.nodes if n.name == "CXCR4")
+    assert cxcr4.score == pytest.approx(0.40)
+    assert cxcr4.metadata["has_known_drug"] is False
+    assert cxcr4.metadata["datatype_scores"] == {"somatic_mutation": 0.40}
+    assert cxcr4.metadata["score_is"] == (
+        "max genetic-evidence score in this release"
+    )
+
+
+def test_the_omnipath_gene_list_holds_no_live_only_gene(tmp_path, monkeypatch):
+    _graph, calls = _dated_build(tmp_path, monkeypatch, live_nodes=True)
+    assert calls["omnipath_gene_lists"], "the OmniPath reader was never called"
+    for gene_list in calls["omnipath_gene_lists"]:
+        assert sorted(gene_list) == sorted(SNAPSHOT_GENES)
+
+
+def test_live_genes_cannot_displace_frame_genes_from_the_cap(
+    tmp_path, monkeypatch
+):
+    """With four live genes and a cap of four, the frame must still win.
+
+    Monarch scores its genes 0.85 and ChEMBL scores CXCR4 0.88, both above
+    every genetic score in the release, so under a score-ranked cap the
+    live genes take the whole budget and the regulatory layer the release
+    actually contains -- the arrow the backdoor search adjusts on -- is
+    never fetched.
+    """
+    graph, _calls = _dated_build(
+        tmp_path, monkeypatch, live_nodes=True, max_genes=4,
+    )
+    regulatory = sorted(
+        (e.source_id, e.target_id)
+        for e in graph.edges if e.source_db == "OmniPath"
+    )
+    assert regulatory == [
+        ("gene:CCR5", "gene:CXCR4"),
+        (f"gene:{CONFOUNDER_GENE}", "gene:CCR5"),
+    ]
+
+
+def test_the_dropped_nodes_are_counted_and_named(tmp_path, monkeypatch, caplog):
+    """Filtering silently is the failure mode; the count must be logged."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="neorx.core.graph.graph_builder"):
+        _dated_build(tmp_path, monkeypatch, live_nodes=True)
+
+    dropped = [
+        r.getMessage() for r in caplog.records
+        if "off-frame" in r.getMessage()
+    ]
+    assert dropped, "the build dropped nodes without saying so"
+    message = " ".join(dropped)
+    assert "Monarch" in message
+    assert "3" in message
+
