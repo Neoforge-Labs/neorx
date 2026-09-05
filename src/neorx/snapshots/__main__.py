@@ -11,6 +11,7 @@ Parquet extract, and records it in the manifest.
 from __future__ import annotations
 
 import gzip
+import lzma
 import tempfile
 from pathlib import Path
 
@@ -42,17 +43,35 @@ _OPENTARGETS_SUBPATHS: dict[str, tuple[str, str]] = {
 _OPENTARGETS_MODERN_SUBPATHS = ("output/association_by_datasource_direct", "output/target")
 
 
-def _read_text(local_path: Path) -> str:
-    """Read a local file as text, transparently decompressing gzip.
+# Compression magic numbers, checked against the bytes rather than the
+# file name: an archive URL's extension is a claim, and the one that
+# matters here was wrong for two years of OmniPath dumps.
+_GZIP_MAGIC = b"\x1f\x8b"
+_XZ_MAGIC = b"\xfd7zXZ\x00"
 
-    Upstream dumps of the line-delimited eras are typically gzipped; a
-    file already unpacked by hand (as the tests do) is plain text. Both
-    must work without a separate flag telling the CLI which one it is.
+
+def _read_text(local_path: Path) -> str:
+    """Read a local file as text, transparently decompressing gzip or xz.
+
+    Upstream ships both. Every OmniPath archive dump is ``.tsv.xz`` --
+    all 22 of them, back to 20180614 -- and the OpenTargets
+    line-delimited eras are gzipped. A file already unpacked by hand is
+    plain text. All three must work without a flag telling the CLI which
+    one it is, because the caller passes a URL and does not otherwise
+    have to know.
+
+    This read xz as UTF-8 until 2026-09-06 and raised
+    ``UnicodeDecodeError: invalid start byte`` on every real OmniPath
+    dump. The tests never saw it: they hand this function text that was
+    unpacked by hand.
     """
     with open(local_path, "rb") as fh:
-        magic = fh.read(2)
-    if magic == b"\x1f\x8b":
+        magic = fh.read(6)
+    if magic.startswith(_GZIP_MAGIC):
         with gzip.open(local_path, "rt", encoding="utf-8") as fh:
+            return fh.read()
+    if magic.startswith(_XZ_MAGIC):
+        with lzma.open(local_path, "rt", encoding="utf-8") as fh:
             return fh.read()
     return local_path.read_text(encoding="utf-8")
 
