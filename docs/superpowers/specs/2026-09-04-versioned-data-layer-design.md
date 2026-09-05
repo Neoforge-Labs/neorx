@@ -85,6 +85,72 @@ leakage in the sampling frame rather than in the predictor, and it is just as
 fatal. `_get_candidate_nodes` must therefore draw candidates from the pinned
 sources only, for any dated run.
 
+### The frame gate
+
+`_get_candidate_nodes` currently admits every node whose type is `gene`,
+`protein`, or `pathogen_gene`, so any source that contributes a gene node
+contributes a candidate. Monarch, ChEMBL, STRING, KEGG and Reactome all do. The
+leak surface is the whole node set, and closing it takes three layers of which
+only the third is enforcement.
+
+**One — derive the frame from the pinned source alone.**
+`candidate_frame(as_of, disease) -> frozenset[str]` reads only the dated
+OpenTargets extract and returns the genes it associated with that disease at
+that date. That set is the population the date would have evaluated.
+
+**Two — restrict fetches to it.** STRING, OmniPath, KEGG, Reactome and UniProt
+all accept a gene list; a dated run passes the frame. This avoids fetching what
+cannot be used. It is efficiency, not safety, and it does not close the leak:
+Monarch and ChEMBL add gene nodes for the *disease* rather than from a gene
+list, so they bypass this layer entirely.
+
+**Three — gate candidate selection, and record every exclusion.**
+`_get_candidate_nodes` takes the frame on a dated run and admits only nodes
+within it. Each excluded node is written to the run record with the source that
+contributed it.
+
+Exclusion is deliberately not an error. Monarch legitimately returns genes
+OpenTargets did not, so refusing would fail every dated run for a condition that
+is normal and expected. But a silent filter is precisely how frame leakage
+creeps back after someone refactors, so the exclusions are counted and named.
+A run that suddenly excludes four hundred genes where it previously excluded
+twelve has had something change upstream, and that is visible in the record
+rather than absorbed.
+
+The invariant is held by a test that injects an off-frame gene into a dated
+run's assembled graph and asserts it never reaches the candidate list. That test
+is the thing a reviewer would ask for.
+
+### Which diseases
+
+Not every disease OpenTargets carries. The corpus is defined by what makes the
+downstream prediction scoreable at all, and the criteria are applied **to the
+pinned release**, not to current data — selecting diseases because they look
+well-studied today, then analysing them as of 2018, is the same hindsight leak
+one level up.
+
+A disease enters the corpus for a given time point when, in that release:
+
+1. it carries at least one gene–disease association on genetic or somatic
+   evidence — without one the causal subgraph is empty and identifiability is
+   trivially zero, which adds noise rather than signal; and
+2. at least one of its targets had reached Phase II or beyond — without that
+   there is no clinical outcome to predict against.
+
+The second criterion is what binds. Most of OpenTargets' disease space has no
+drug that got far enough to have an outcome.
+
+The resulting count is a property of each release, not something to assert in
+advance, so measuring it is the first task of the implementation plan rather
+than a number written here. The expectation is hundreds of diseases and low
+thousands of target–disease pairs — enough for the prediction to have power,
+which seven diseases plainly are not.
+
+The seven diseases from the original benchmark are retained wherever they meet
+the criteria, so the new results can be set beside the old ones. That
+comparison carries every caveat in the corrigendum audit and is context, not
+evidence.
+
 ### Derived snapshots, not raw releases
 
 A modern OpenTargets release does not fit on this machine, and mirroring one
@@ -186,6 +252,8 @@ hundreds of pairs — a measurement rather than an anecdote.
 | Snapshot vs live | `SourceResolver` on an optional `as_of` | Keeps the interactive path unchanged |
 | Missing snapshot | Refuse, naming the source | A silent fallback to live rebuilds the anachronism invisibly |
 | Reader | polars | Project standard |
+| Frame gate | Filter at candidate selection, record exclusions | Refusing fails every dated run; a silent filter is how leakage returns |
+| Disease corpus | Genetic evidence + a target past Phase II, judged on the pinned release | Selecting on today's data and analysing as of 2018 is the same leak one level up |
 
 ---
 
@@ -212,6 +280,8 @@ hundreds of pairs — a measurement rather than an anecdote.
 4. A disease graph built with `as_of=2018-06` contains no edge whose source
    release postdates that date.
 5. The candidate frame for a dated run is drawn only from pinned sources.
+6. A gene injected into a dated run's graph from outside its frame never reaches
+   the candidate list, and the exclusion is recorded with its source.
 6. `snapshots/manifest.toml` records a release ID, digest, and extractor
    version for every extract, and a run's `env.json` cites them.
 7. Building one disease from snapshots is faster than the live path by at
