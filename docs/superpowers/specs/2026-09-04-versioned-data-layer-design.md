@@ -227,14 +227,32 @@ Three, chosen so each OpenTargets format era is represented and each has a
 matching OmniPath dump. OmniPath's interaction archive begins 2018-06-14 and
 OpenTargets 18.06 is June 2018, so the earliest usable pairing is nearly exact.
 
-| Time point | OpenTargets | OmniPath archive | OT layout |
-|---|---|---|---|
-| 2018-06 | `18.06` | `20180614-20181114` | flat `18.06_association_data.json.gz` (0.18 GB) |
-| 2021-11 | `21.11` | `20211113-20220114` | ETL era — `output/` Parquet |
-| 2025-06 | `25.06` | latest ≤ 2025-06 | current — `output/association_by_datasource_direct` |
+| Time point | OpenTargets | OmniPath archive | OmniPath data as of | OT layout |
+|---|---|---|---|---|
+| 2018-06 | `18.06` | `20180614-20181114` | 2018-06-14 | flat `18.06_association_data.json.gz` (0.18 GB) |
+| 2021-11 | `21.11` | `20211113-20220114` | 2021-11-13 | ETL era — `output/` Parquet |
+| 2025-06 | `25.06` | `20230728-20250813` | **2023-07-28** | current — `output/association_by_datasource_direct` |
+
+**Verified 2026-09-06** against the live archive index, which lists 22
+interaction dumps. The first two pairings are as close as the table claims.
+The third is not, and the original entry — "latest ≤ 2025-06" — concealed it:
+the archive has no refresh between 2023-07-28 and 2025-08-13, so the dump
+covering 2025-06 carries data roughly 23 months older than the OpenTargets
+release it is paired with. The time point is still usable, because what it
+compares against is the other two time points read the same way, but the gap
+belongs in the paper's limitations rather than behind a "latest ≤" that reads
+as contemporaneous.
+
+Archived dumps are `.tsv.xz`, not the `.tsv.gz` shown in the storage layout
+above. The snapshot builder detects compression from the file's magic bytes
+rather than its extension, because an archive URL's extension is a claim and
+this one was wrong in the spec for the life of the sub-project.
 
 Three readers on the OpenTargets side. OmniPath's archived TSV schema is
-uniform across the range, so one reader covers all three.
+uniform across the range, so one reader covers all three — confirmed by
+parsing the real 2018 dump, which yields 644,845 rows in the canonical schema
+and carries no `consensus_direction` column, exactly as the synthesised-
+consensus decision assumed.
 
 Three points rather than one is what turns "it worked at our cut date" into "it
 holds across three", which is the difference between a result a reviewer probes
