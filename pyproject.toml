@@ -107,6 +107,9 @@ dependencies = [
     "psycopg2-binary>=2.9.2",
     "redis>=5.0",
     "chembl-downloader>=0.5.2",
+    # Writing snapshots/manifest.toml. Python ships tomllib for reading
+    # only, so a writer is a real dependency rather than a convenience.
+    "tomli-w>=1.0",
 ]
 
 [project.urls]
