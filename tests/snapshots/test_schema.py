@@ -7,6 +7,7 @@ column set is defined once, here, and asserted rather than assumed.
 
 import polars as pl
 
+from neorx.core.causal.graph_semantics import GENETIC_EVIDENCE_CLASSES
 from neorx.snapshots.schema import (
     ASSOCIATION_COLUMNS,
     EXTRACTOR_VERSION,
@@ -56,3 +57,21 @@ def test_extractor_version_is_an_integer_that_can_be_recorded():
     # same release made by different extractor code are different inputs.
     assert isinstance(EXTRACTOR_VERSION, int)
     assert EXTRACTOR_VERSION >= 1
+
+
+def test_genetic_datatypes_matches_causal_evidence_classes():
+    """GENETIC_DATATYPES must stay equal to GENETIC_EVIDENCE_CLASSES.
+
+    GENETIC_DATATYPES gates which genes enter a dated run's candidate
+    frame; GENETIC_EVIDENCE_CLASSES gates which gene-disease edges
+    Pearl's backdoor criterion is allowed to reason over. If they drift
+    apart, the frame admits genes the causal engine won't consider or
+    excludes genes it would, and the reported identifiability rate moves
+    for a reason that appears nowhere in any diff. The previous subproject
+    shipped three separate defects with exactly that signature.
+
+    This test catches accidental drift. Intentional divergence is possible
+    -- simply state it in the test docstring when either constant is
+    deliberately changed.
+    """
+    assert GENETIC_DATATYPES == GENETIC_EVIDENCE_CLASSES
