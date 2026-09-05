@@ -45,8 +45,10 @@ from typing import TYPE_CHECKING, Any
 import networkx as nx
 
 from neorx.core.graph.dated_frame import (
-    frame_symbols,
+    enrich,
+    frame_identity,
     is_pinned,
+    match_key,
     restrict_to_frame,
 )
 from neorx.core.graph.models import (
@@ -222,10 +224,13 @@ def build_disease_graph(
     sources_queried: list[str] = []
 
     # Filled once the pinned reader has run: on a dated build its node set
-    # is the frame, and every unpinned source is restricted to it. ``None``
-    # on an undated build, where no source is restricted.
-    frame: frozenset[str] | None = None
+    # is the frame, and every unpinned source is restricted to it. Maps
+    # each identity key to the node id the release wrote -- see
+    # ``neorx.core.graph.dated_frame.frame_identity``. ``None`` on an
+    # undated build, where no source is restricted.
+    frame: dict[str, str] | None = None
     dropped_by_source: dict[str, list[str]] = {}
+    pathogens_by_source: dict[str, list[str]] = {}
 
     def admit(
         source_name: str,
@@ -234,9 +239,16 @@ def build_disease_graph(
     ) -> tuple[list[GraphNode], list[GraphEdge]]:
         """Take an unpinned source's contribution into the build."""
         if frame is not None:
-            nodes, edges, dropped = restrict_to_frame(nodes, edges, frame)
-            if dropped:
-                dropped_by_source.setdefault(source_name, []).extend(dropped)
+            kept = restrict_to_frame(nodes, edges, frame)
+            nodes, edges = kept.nodes, kept.edges
+            if kept.off_frame:
+                dropped_by_source.setdefault(source_name, []).extend(
+                    kept.off_frame
+                )
+            if kept.excluded_by_type:
+                pathogens_by_source.setdefault(source_name, []).extend(
+                    kept.excluded_by_type
+                )
         all_nodes.extend(nodes)
         all_edges.extend(edges)
         return nodes, edges
@@ -276,7 +288,7 @@ def build_disease_graph(
     logger.info("  Open Targets: %d nodes, %d edges.", len(ot_nodes), len(ot_edges))
 
     if ot_reader is not None:
-        frame = frame_symbols(ot_nodes)
+        frame = frame_identity(ot_nodes)
         logger.info(
             "Dated build frame: %d genes from the pinned release. Unpinned "
             "sources may enrich them and may not add to them.", len(frame),
@@ -382,6 +394,18 @@ def build_disease_graph(
                 for source, names in sorted(dropped_by_source.items())
             ),
             len(frame),
+        )
+    if frame is not None and pathogens_by_source:
+        n_pathogens = sum(len(ids) for ids in pathogens_by_source.values())
+        logger.info(
+            "Dated build of '%s' as of %s: excluded %d pathogen gene node(s) "
+            "by node type (%s). No source in the dated stack pins a pathogen "
+            "target, so its score would be today's clinical phase.",
+            disease, as_of, n_pathogens,
+            ", ".join(
+                f"{source}: {len(ids)} ({', '.join(sorted(set(ids)))})"
+                for source, ids in sorted(pathogens_by_source.items())
+            ),
         )
 
     # ── Step 4: UniProt Enrichment ──────────────────────────────
@@ -579,6 +603,16 @@ def _extract_gene_symbols(
 ) -> list[str]:
     """Extract unique gene symbols from node names.
 
+    Symbols keep the spelling their node carries. They used to be
+    upper-cased here, which is wrong in both directions: the pinned
+    OmniPath extract is filtered on an exact symbol match, so a
+    mixed-case HGNC symbol -- ``C9orf72``, and 871 other human symbols in
+    the 2018 dump -- was asked for in a form the extract does not contain
+    and lost its whole regulatory layer; and the live per-gene APIs are
+    given a symbol that is not the one HGNC publishes. Duplicates are
+    still collapsed, by ``match_key``, so two spellings of one gene are
+    one entry rather than two requests.
+
     Parameters
     ----------
     nodes : list[GraphNode]
@@ -587,29 +621,50 @@ def _extract_gene_symbols(
         If > 0, keep only the top-scoring genes (by their node
         score) to avoid sending hundreds of genes to per-gene APIs.
     """
-    # Collect unique genes, remembering the best score for each
-    best_score: dict[str, float] = {}
+    # Collect unique genes, remembering the best score for each and the
+    # spelling that came with it. A pinned node's score wins over any
+    # live one even when it is lower: this ranking decides the cap, and a
+    # release's gene must not be pushed down the list -- or off it -- by
+    # a number derived from today's clinical phase. On an undated build no
+    # node is pinned, so this is exactly the old highest-score rule.
+    best: dict[str, tuple[bool, float, str]] = {}
     for node in nodes:
         if node.node_type in (NodeType.GENE, NodeType.PROTEIN):
-            sym = node.name.upper()
-            if sym not in best_score or node.score > best_score[sym]:
-                best_score[sym] = node.score
+            sym = node.name.strip()
+            if not sym:
+                continue
+            key = match_key(sym)
+            entry = (is_pinned(node), node.score, sym)
+            if key not in best or entry[:2] > best[key][:2]:
+                best[key] = entry
 
     # Sort by score descending, then cap
-    ranked = sorted(best_score.items(), key=lambda kv: kv[1], reverse=True)
+    ranked = sorted(best.values(), key=lambda e: e[1], reverse=True)
     if max_genes > 0:
         ranked = ranked[:max_genes]
-    return [sym for sym, _ in ranked]
+    return [entry[2] for entry in ranked]
 
 
 def _enrich_nodes_with_uniprot(
     nodes: list[GraphNode],
     uniprot_data: dict[str, dict[str, Any]],
 ) -> None:
-    """In-place enrichment of nodes with UniProt metadata."""
+    """In-place enrichment of nodes with UniProt metadata.
+
+    Keyed by ``match_key`` on both sides, because the gene list handed to
+    UniProt now carries each symbol's real spelling rather than an
+    upper-cased one.
+
+    The three metadata writes go through ``enrich`` rather than ``=``.
+    Today they only add keys a snapshot node does not carry, so the
+    behaviour is unchanged -- but this runs before ``_merge_nodes``, i.e.
+    outside the protection that keeps a pinned node's metadata the
+    release's, and a live UniProt answer must not be able to start
+    overwriting one because a key name coincided.
+    """
+    by_key = {match_key(gene): info for gene, info in uniprot_data.items()}
     for node in nodes:
-        gene = node.name.upper()
-        info = uniprot_data.get(gene)
+        info = by_key.get(match_key(node.name))
         if not info:
             continue
 
@@ -621,19 +676,23 @@ def _enrich_nodes_with_uniprot(
             node.description = info["function"]
 
         # Store druggability in metadata
-        node.metadata["is_druggable"] = info.get("is_druggable", False)
-        node.metadata["subcellular_location"] = info.get("subcellular_location", "")
-        node.metadata["go_terms"] = info.get("go_terms", [])
+        enrich(node, "is_druggable", info.get("is_druggable", False))
+        enrich(node, "subcellular_location", info.get("subcellular_location", ""))
+        enrich(node, "go_terms", info.get("go_terms", []))
 
 
 def _enrich_nodes_with_pdb(
     nodes: list[GraphNode],
     pdb_data: dict[str, list[dict[str, Any]]],
 ) -> None:
-    """In-place enrichment of nodes with PDB structure IDs."""
+    """In-place enrichment of nodes with PDB structure IDs.
+
+    Keyed by ``match_key`` on both sides, for the same reason
+    ``_enrich_nodes_with_uniprot`` is.
+    """
+    by_key = {match_key(gene): structs for gene, structs in pdb_data.items()}
     for node in nodes:
-        gene = node.name.upper()
-        structs = pdb_data.get(gene)
+        structs = by_key.get(match_key(node.name))
         if not structs:
             continue
         # Prefer structures with ligands (defines binding pocket)

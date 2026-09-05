@@ -23,7 +23,7 @@ from neorx.snapshots.manifest import SnapshotEntry, digest_file, read_manifest, 
 from neorx.snapshots.omnipath import read_archive_tsv
 from neorx.snapshots.opentargets import read_1806, read_2111, read_modern
 from neorx.snapshots.reader import SnapshotStore
-from neorx.snapshots.schema import EXTRACTOR_VERSION
+from neorx.snapshots.schema import EXTRACTOR_VERSION, ExtractNotes
 
 app = typer.Typer(
     name="snapshot",
@@ -76,26 +76,28 @@ def _read_text(local_path: Path) -> str:
     return local_path.read_text(encoding="utf-8")
 
 
-def _build_opentargets(release: str, local_path: Path) -> tuple[pl.DataFrame, bool]:
-    """Dispatch on release era and return (canonical rows, False).
+def _build_opentargets(release: str, local_path: Path) -> tuple[pl.DataFrame, ExtractNotes]:
+    """Dispatch on release era and return (canonical rows, empty notes).
 
-    OpenTargets has no synthesised-column caveat like OmniPath's 2018
-    archive, so the second element is always False; it exists so this
-    function has the same return shape as ``_build_omnipath`` and the
-    caller does not need to know which source it is dealing with.
+    OpenTargets has neither of the caveats ``ExtractNotes`` records -- no
+    synthesised column and no organism filter, because the association
+    extract is keyed on Ensembl *human* gene ids to begin with. The
+    default-constructed notes exist so this function has the same return
+    shape as ``_build_omnipath`` and the caller does not need to know
+    which source it is dealing with.
     """
     if release == "18.06":
         lines = _read_text(local_path).splitlines()
-        return read_1806(lines), False
+        return read_1806(lines), ExtractNotes()
 
     assoc_rel, target_rel = _OPENTARGETS_SUBPATHS.get(release, _OPENTARGETS_MODERN_SUBPATHS)
     associations = pl.read_parquet(local_path / assoc_rel)
     targets = pl.read_parquet(local_path / target_rel)
     reader = read_2111 if release == "21.11" else read_modern
-    return reader(associations, targets), False
+    return reader(associations, targets), ExtractNotes()
 
 
-def _build_omnipath(release: str, local_path: Path) -> tuple[pl.DataFrame, bool]:
+def _build_omnipath(release: str, local_path: Path) -> tuple[pl.DataFrame, ExtractNotes]:
     """Read an archived OmniPath TSV.
 
     ``release`` is accepted but not used to choose a reader -- there is
@@ -170,7 +172,7 @@ def build_cmd(
             # The guard above guarantees url is set when from_file is not.
             local_path = fetched_path = _download(url)  # type: ignore[arg-type]
 
-        frame, synthesised_consensus = _BUILDERS[source](release, local_path)
+        frame, notes = _BUILDERS[source](release, local_path)
 
         store = SnapshotStore(root)
         # Reuses SnapshotStore's own path convention (source ->
@@ -188,7 +190,7 @@ def build_cmd(
             sha256=sha256,
             extractor_version=EXTRACTOR_VERSION,
             rows=frame.height,
-            synthesised_consensus=synthesised_consensus,
+            synthesised_consensus=notes.consensus_direction_synthesised,
         )
         write_entry(root / "manifest.toml", entry)
     finally:
@@ -198,6 +200,14 @@ def build_cmd(
             fetched_path.unlink(missing_ok=True)
 
     typer.echo(f"{source} {release}: wrote {frame.height} rows to {out_path}")
+    if notes.non_human_rows_dropped:
+        # Said out loud rather than left to the row count. Half the 2018
+        # OmniPath dump is mouse and rat, and an extract that quietly
+        # halved is indistinguishable from one that read half a file.
+        typer.echo(
+            f"{source} {release}: dropped {notes.non_human_rows_dropped} "
+            f"non-human row(s); both endpoints must be taxon 9606."
+        )
 
 
 @app.command("list")

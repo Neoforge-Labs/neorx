@@ -7,7 +7,7 @@ is a pure function of already-parsed rows. A snapshot therefore feeds the
 same parser the live API does, and there is exactly one implementation of
 edge construction in the codebase rather than two that can drift apart.
 
-Two archive-format quirks matter enough to be worth a comment:
+Three archive-format facts matter enough to be worth a comment:
 
 Boolean encoding differs by source era. The ARCHIVE writes ``is_directed``,
 ``is_stimulation`` and ``is_inhibition`` as ``'1'``/``'0'``; the LIVE API
@@ -16,6 +16,31 @@ normalised to real booleans in one place (``_to_bool``) rather than per
 column, and an unrecognised or empty value reads as False rather than
 null -- null is falsy in a way that silently drops rows instead of stating
 plainly that the source did not make a directedness claim.
+
+Organism is the other one, and it is the reason the reader filters at
+all. The archive is not human-only: 316,327 of the 2018 dump's 644,845
+rows are mouse (242,338) or rat (73,989), and ``INTERACTION_COLUMNS``
+carries nothing that marks them. Nothing downstream can tell them apart
+afterwards, so the filter has to run here, on ``ncbi_tax_id_source`` and
+``ncbi_tax_id_target``, before those columns are dropped. Both endpoints
+must be human: a mouse protein acting on a human one is not a human
+regulatory arrow.
+
+This matters more than a 49% row count suggests, because gene symbols are
+matched between the extract and a graph's gene list. Exact-case matching
+hid most of the mouse rows by accident -- mouse symbols are Title-case,
+``A1bg``, ``A2m`` -- and incompletely: 15 non-human rows pass an
+exact-case human symbol filter today and 5 of them are directed, putting
+mouse complement (C3->C5) and coagulation-cascade (F5->F2, F3->F7,
+F7->F10) arrows into human graphs. The moment symbol matching becomes
+case-insensitive, which is what a mixed-case human symbol like
+``C9orf72`` requires, 15,603 of the dump's 34,211 symbols become
+matchable and that 15 becomes thousands. Organism filtering is what makes
+the case rule safe, so it lands first.
+
+An archive without the two tax columns is refused rather than passed
+through unfiltered. An extract's whole claim is that it is human; a
+reader that cannot check that claim must say so, not assume it.
 
 ``consensus_direction`` does not exist in the 2018 archive column set at
 all. Sub-project 3's admissibility gate requires ``is_directed AND
@@ -36,7 +61,13 @@ import io
 
 import polars as pl
 
-from neorx.snapshots.schema import INTERACTION_COLUMNS, empty_interactions
+from neorx.snapshots.schema import (
+    HUMAN_TAXON_ID,
+    INTERACTION_COLUMNS,
+    ORGANISM_COLUMNS,
+    ExtractNotes,
+    empty_interactions,
+)
 
 __all__ = ["read_archive_tsv", "to_interaction_rows"]
 
@@ -56,18 +87,39 @@ def _to_bool(flag: str) -> pl.Expr:
     return pl.col(flag).fill_null("").str.to_lowercase().is_in(_TRUTHY).alias(flag)
 
 
-def read_archive_tsv(text: str) -> tuple[pl.DataFrame, bool]:
+def read_archive_tsv(text: str) -> tuple[pl.DataFrame, ExtractNotes]:
     """Parse an archived interactions TSV into the canonical schema.
 
-    Returns ``(frame, consensus_direction_synthesised)``. The flag is
-    True when the source TSV had no ``consensus_direction`` column and
-    the reader set it equal to ``is_directed`` instead -- see the module
-    docstring for why that substitution is made and why it must be
-    visible to the caller rather than defaulted away.
+    Returns ``(frame, notes)``. Both fields of ``notes`` record something
+    the rows themselves no longer show -- that ``consensus_direction`` was
+    synthesised from ``is_directed``, and how many non-human rows the
+    organism filter removed. See the module docstring for why each
+    substitution is made and why neither may be defaulted away.
+
+    Raises ``ValueError`` when the source has no organism columns. Every
+    consumer of this extract treats its rows as human; a reader that
+    cannot verify that must refuse rather than assume it.
     """
     raw = pl.read_csv(io.StringIO(text), separator="\t", infer_schema_length=0)
+    missing = [c for c in ORGANISM_COLUMNS if c not in raw.columns]
+    if missing:
+        raise ValueError(
+            f"OmniPath archive has no organism column(s) {missing}; it has "
+            f"{sorted(raw.columns)}. Both {list(ORGANISM_COLUMNS)} are "
+            f"required: 49% of the 2018 dump is mouse and rat, nothing "
+            f"downstream distinguishes them, and the extract's schema "
+            f"cannot carry the distinction."
+        )
     if raw.height == 0:
-        return empty_interactions(), "consensus_direction" not in raw.columns
+        return empty_interactions(), ExtractNotes(
+            consensus_direction_synthesised="consensus_direction" not in raw.columns,
+        )
+
+    human = raw.filter(
+        (pl.col(ORGANISM_COLUMNS[0]).str.strip_chars() == HUMAN_TAXON_ID)
+        & (pl.col(ORGANISM_COLUMNS[1]).str.strip_chars() == HUMAN_TAXON_ID)
+    )
+    dropped = raw.height - human.height
 
     synthesised = "consensus_direction" not in raw.columns
     consensus_expr = (
@@ -76,7 +128,7 @@ def read_archive_tsv(text: str) -> tuple[pl.DataFrame, bool]:
         else _to_bool("consensus_direction")
     )
 
-    df = raw.select(
+    df = human.select(
         pl.col("source_genesymbol").alias("source_symbol"),
         pl.col("target_genesymbol").alias("target_symbol"),
         _to_bool("is_directed"),
@@ -87,7 +139,10 @@ def read_archive_tsv(text: str) -> tuple[pl.DataFrame, bool]:
         pl.col("references").fill_null("").alias("references"),
     ).cast(INTERACTION_COLUMNS)
 
-    return df, synthesised
+    return df, ExtractNotes(
+        consensus_direction_synthesised=synthesised,
+        non_human_rows_dropped=dropped,
+    )
 
 
 def to_interaction_rows(df: pl.DataFrame) -> list[dict]:

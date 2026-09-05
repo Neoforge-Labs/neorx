@@ -67,6 +67,7 @@ from neorx.core.graph.models import (
     EdgeType,
     TargetClassification,
 )
+from neorx.core.graph.dated_frame import match_key
 from neorx.core.graph.graph_builder import disease_graph_to_networkx
 from neorx.core.bio.classifier import TargetClassifier, TargetType, classify_disease
 from neorx.core.bio.tissue_filter import TissueFilter
@@ -244,9 +245,16 @@ def _get_candidate_nodes(
     return value: every excluded node is named with the source that
     contributed it, so a run that suddenly excludes far more than it used
     to is visible in the record rather than absorbed silently.
+
+    The comparison goes through ``dated_frame.match_key``, the same
+    normalisation the builder's frame gate and the pinned OmniPath filter
+    use. It was case-sensitive here while the builder's was case-blind,
+    against a frame drawn from a different place -- so a real HGNC symbol
+    carrying lowercase could pass one gate and fail the other.
     """
     candidates: list[str] = []
     excluded: list[dict[str, str]] = []
+    frame_keys = None if frame is None else {match_key(s) for s in frame}
 
     for node_id, data in G.nodes(data=True):
         ntype = data.get("node_type", "")
@@ -255,7 +263,7 @@ def _get_candidate_nodes(
         if node_id == disease_node_id:
             continue
 
-        if frame is not None and data.get("name", "") not in frame:
+        if frame_keys is not None and match_key(data.get("name", "")) not in frame_keys:
             excluded.append(
                 {
                     "node_id": node_id,

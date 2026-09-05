@@ -69,6 +69,7 @@ from typing import Protocol
 
 import polars as pl
 
+from neorx.core.graph.dated_frame import match_key
 from neorx.core.graph.models import EdgeType, GraphEdge, GraphNode, NodeType
 from neorx.core.sources.omnipath import _interactions_to_edges
 from neorx.core.sources.open_targets import _evidence_class_for
@@ -224,16 +225,49 @@ def omnipath_from_snapshot(
     what an OmniPath edge means. ``to_interaction_rows`` performs the
     key mapping between the extract's column names and the ones that
     function reads; neither side is renamed to meet the other.
+
+    Symbols are matched through ``dated_frame.match_key`` rather than
+    exactly. The extract spells a symbol the way its release does and the
+    caller spells it the way *its* release does; an exact match therefore
+    dropped every mixed-case HGNC symbol -- ``C9orf72`` and 871 other
+    human symbols in the 2018 dump -- from the regulatory layer, without
+    a log line. That is safe only because ``read_archive_tsv`` filters
+    the extract to human at extraction time: 15,603 of the dump's 34,211
+    symbols carry lowercase and most of them are mouse.
+
+    The rows are then re-spelled to the caller's spelling before they
+    reach the edge builder, which names each endpoint ``gene:<symbol>``.
+    The archive decides which interactions exist; the graph's own nodes
+    decide what they are called, or the edge would name a node that is
+    not there.
     """
-    known = {g.strip() for g in gene_symbols if g and g.strip()}
-    if not known:
+    by_key = {
+        match_key(g): g.strip()
+        for g in gene_symbols
+        if g and g.strip()
+    }
+    if not by_key:
         return [], []
 
-    symbols = list(known)
-    frame = store.interactions(release).filter(
-        pl.col("source_symbol").is_in(symbols) & pl.col("target_symbol").is_in(symbols)
+    keys = list(by_key)
+    matching = (
+        store.interactions(release)
+        .with_columns(
+            pl.col("source_symbol").str.strip_chars().str.to_lowercase()
+            .alias("_source_key"),
+            pl.col("target_symbol").str.strip_chars().str.to_lowercase()
+            .alias("_target_key"),
+        )
+        .filter(pl.col("_source_key").is_in(keys) & pl.col("_target_key").is_in(keys))
+        .with_columns(
+            pl.col("_source_key").replace_strict(by_key).alias("source_symbol"),
+            pl.col("_target_key").replace_strict(by_key).alias("target_symbol"),
+        )
+        .drop("_source_key", "_target_key")
     )
-    return [], _interactions_to_edges(to_interaction_rows(frame), known)
+    return [], _interactions_to_edges(
+        to_interaction_rows(matching), set(by_key.values())
+    )
 
 
 _READERS: dict[str, Callable[..., Callable[..., SourcePair]]] = {
