@@ -1338,10 +1338,6 @@ def _row(symbol, disease="EFO_1", datatype="genetic_association", score=0.5):
     }
 
 
-def test_frame_contains_genetically_supported_genes_for_that_disease():
-    pass  # replaced below; see test body in Step 3 note
-
-
 def test_frame_is_drawn_from_genetic_evidence_only(tmp_path):
     store = _store(tmp_path, [
         _row("PIK3CA", datatype="genetic_association"),
@@ -1394,8 +1390,6 @@ def test_corpus_is_empty_when_no_disease_meets_both_criteria(tmp_path):
     store = _store(tmp_path, [_row("BRCA1", disease="EFO_2")])
     assert corpus_diseases(store, "18.06", phase2_targets={}) == frozenset()
 ```
-
-Delete the placeholder `test_frame_contains_genetically_supported_genes_for_that_disease` stub above before running — it exists only to mark where the real tests begin, and a test that asserts nothing is a defect by this project's own standard.
 
 - [ ] **Step 2: Run test to verify it fails**
 
