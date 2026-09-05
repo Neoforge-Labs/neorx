@@ -342,18 +342,21 @@ def check_no_fabricated_statistics(causal_dir: Path) -> list[Finding]:
 
     for path in sorted(causal_dir.rglob("*.py")):
         for lineno, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), start=1,
+            path.read_text(encoding="utf-8").splitlines(),
+            start=1,
         ):
             for name in _FABRICATED_STATISTIC_NAMES:
                 if name in line:
-                    findings.append(Finding(
-                        path=str(path),
-                        line=lineno,
-                        message=(
-                            f"{name} is a fabricated statistic removed in "
-                            f"sub-project 3; it must not return. See "
-                            f"docs/superpowers/specs/2026-09-03-correctness-design.md"
-                        ),
-                    ))
+                    findings.append(
+                        Finding(
+                            path=str(path),
+                            line=lineno,
+                            message=(
+                                f"{name} is a fabricated statistic removed in "
+                                f"sub-project 3; it must not return. See "
+                                f"docs/superpowers/specs/2026-09-03-correctness-design.md"
+                            ),
+                        )
+                    )
 
     return findings
