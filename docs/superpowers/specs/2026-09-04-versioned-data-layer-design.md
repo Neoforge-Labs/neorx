@@ -71,11 +71,39 @@ The prediction uses identifiability: the verdict, the adjustment set, the
 near-miss count, the cyclic status. Every one of those is computed from the
 causal subgraph, which by the sub-project 3 design is built from exactly two
 sources — OpenTargets genetic associations and OmniPath directed regulatory
-interactions. The associational sources (STRING, Reactome, KEGG, Monarch)
-contribute edges that identification filters out before it runs.
+interactions. The associational sources (STRING, Reactome, KEGG, Monarch,
+ChEMBL) contribute edges that identification filters out before it runs.
 
-So those two sources are pinned, and the rest stay current. Pinning STRING
-would buy rigour against a leak that does not exist.
+So those two sources are pinned, and the rest stay current.
+
+**Corrected 2026-09-06.** This section originally continued: "Pinning STRING
+would buy rigour against a leak that does not exist." That was wrong, and the
+error was found by executing a dated build rather than by reading it. Their
+*edges* are filtered. Their **nodes** are not, and an unpinned node does three
+things a filtered edge cannot.
+
+It wins the graph builder's score merge, which keeps the highest score.
+Monarch assigns a flat 0.85 to every causal association, above most
+OpenTargets genetic scores; ChEMBL's score is 60% today's clinical phase —
+which is the outcome sub-project 6 exists to predict, entering a dated graph
+as a predictor. A dated node was observed carrying Monarch's live 0.85 while
+its own metadata still asserted the pinned provenance.
+
+It draws causal-admissible arrows out of the *pinned* OmniPath extract,
+because the gene list handed to that reader was built from every node
+collected so far. On identical snapshots, adding one live node flipped a
+verdict from `identifiable_by_adjustment` to `cyclic_component`.
+
+And it competes for the `max_genes` cap, displacing frame genes from the
+regulatory query entirely.
+
+The correct rule, and the one now implemented: **on a dated build the gene
+node population is the frame.** Unpinned sources may enrich nodes already in
+the frame — pathways, structures, protein metadata, associational edges among
+frame genes — but may not introduce gene or protein nodes, and may not
+overwrite a pinned node's score or provenance. Pinning STRING is still
+unnecessary; what was necessary was never letting an unpinned source decide
+who is in the graph.
 
 **The candidate frame is pinned with them.** This is the subtle half. Features
 computed from 2018 data are useless if the *population* was chosen with
@@ -99,10 +127,22 @@ OpenTargets extract and returns the genes it associated with that disease at
 that date. That set is the population the date would have evaluated.
 
 **Two — restrict fetches to it.** STRING, OmniPath, KEGG, Reactome and UniProt
-all accept a gene list; a dated run passes the frame. This avoids fetching what
-cannot be used. It is efficiency, not safety, and it does not close the leak:
-Monarch and ChEMBL add gene nodes for the *disease* rather than from a gene
-list, so they bypass this layer entirely.
+all accept a gene list; a dated run passes the frame.
+
+**Corrected 2026-09-06.** This layer was originally described as "efficiency,
+not safety", on the reasoning that Monarch and ChEMBL add gene nodes for the
+*disease* rather than from a gene list and so bypass it. The first half of
+that is false and the second is true. Passing the frame to the gene-list
+sources is what stops an unpinned gene from reaching the pinned OmniPath
+reader and drawing causal arrows, and what stops unpinned genes from
+displacing frame genes under `max_genes`. It is safety, and it is the layer
+that closes the identifiability leak.
+
+The Monarch/ChEMBL observation stands and needs its own answer, which layer
+two does not provide: because they are queried by disease rather than by gene
+list, a dated build must drop the non-frame gene nodes they return, and must
+not let the frame genes they return overwrite a pinned score. That is the
+population rule stated under *Scope of pinning*.
 
 **Three — gate candidate selection, and record every exclusion.**
 `_get_candidate_nodes` takes the frame on a dated run and admits only nodes
@@ -247,6 +287,7 @@ hundreds of pairs — a measurement rather than an anecdote.
 | Decision | Choice | Rationale |
 |---|---|---|
 | Scope of pinning | OpenTargets + OmniPath, plus the candidate frame | Only these feed the causal subgraph; frame leakage is the subtle failure |
+| Node population on a dated build | The frame. Unpinned sources enrich, never introduce or overwrite | Corrected 2026-09-06: unpinned *nodes* set scores and draw pinned OmniPath arrows even when their edges are filtered |
 | Storage | Derived Parquet extracts, raw discarded | A release does not fit; the subgraph needs four columns |
 | Time points | Three: 2018-06, 2021-11, 2025-06 | One per OT format era, each with a matching OmniPath dump |
 | Snapshot vs live | `SourceResolver` on an optional `as_of` | Keeps the interactive path unchanged |
@@ -282,7 +323,20 @@ hundreds of pairs — a measurement rather than an anecdote.
 5. The candidate frame for a dated run is drawn only from pinned sources.
 6. A gene injected into a dated run's graph from outside its frame never reaches
    the candidate list, and the exclusion is recorded with its source.
-6. `snapshots/manifest.toml` records a release ID, digest, and extractor
+7. `snapshots/manifest.toml` records a release ID, digest, and extractor
    version for every extract, and a run's `env.json` cites them.
-7. Building one disease from snapshots is faster than the live path by at
+8. Building one disease from snapshots is faster than the live path by at
    least an order of magnitude, measured and recorded.
+
+Added 2026-09-06, after a dated build was found to satisfy 4 and 6 while
+still reading current data through its node set:
+
+9. No gene or protein node in a dated graph comes from an unpinned source,
+   and no unpinned source changes a pinned node's score or provenance.
+10. An identifiability verdict computed on a dated graph is unchanged by
+    whether the unpinned sources returned anything. This is the criterion
+    that fails loudest when the population rule is broken, and the one to
+    write first when touching this path.
+
+Criteria 1-8 were originally numbered with two 6s. Renumbered here; no
+criterion was added to or removed from that range.
