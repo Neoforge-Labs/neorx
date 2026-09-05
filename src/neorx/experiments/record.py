@@ -15,6 +15,7 @@ import hashlib
 import json
 import platform
 import subprocess
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -125,13 +126,23 @@ class RunRecord:
         rec._experiment = experiment
         (path / "rows.jsonl").touch()
 
+        # The whole entry, not a chosen subset. A digest pins which bytes
+        # an extract was, not what they meant, and recovering the meaning
+        # needs the manifest -- which `write_entry` replaces in place for
+        # a given (source, release). Rebuild an extract after fixing its
+        # extractor and the earlier entry is gone, leaving a months-old
+        # run citing a digest nothing can interpret. `synthesised_consensus`
+        # is what makes that bite: it says whether OmniPath's consensus
+        # direction was read or derived, which changes what every directed
+        # edge in a dated graph means. Choosing a subset would mean
+        # predicting which fields carry meaning, and `source` and `release`
+        # are the only two safe to drop because they are the key.
         snapshots: dict[str, dict[str, Any]] = {}
         if snapshot_manifest is not None:
             for (source, release), entry in read_manifest(snapshot_manifest).items():
-                snapshots[f"{source}/{release}"] = {
-                    "sha256": entry.sha256,
-                    "extractor_version": entry.extractor_version,
-                }
+                fields = asdict(entry)
+                del fields["source"], fields["release"]
+                snapshots[f"{source}/{release}"] = fields
 
         (path / "env.json").write_text(
             json.dumps(
