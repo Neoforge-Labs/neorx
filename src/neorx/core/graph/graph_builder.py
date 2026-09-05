@@ -62,6 +62,7 @@ from neorx.core.sources import (
     query_chembl,
 )
 from neorx.core.cache import get_cache, _cache_key, GRAPH_TTL
+from neorx.snapshots.resolver import SourceResolver
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,8 @@ def build_disease_graph(
     string_min_score: int = 400,
     use_cache: bool = True,
     allow_mocks: bool = False,
+    as_of: str | None = None,
+    resolver: SourceResolver | None = None,
 ) -> DiseaseGraph:
     """Build a comprehensive causal knowledge graph for a disease.
 
@@ -90,12 +93,37 @@ def build_disease_graph(
         If *True*, data source clients may fall back to curated
         mock data when a live API call fails.  If *False*
         (default), failed API calls produce empty results.
+    as_of : str | None
+        A release date for a dated build. ``None`` (default) means
+        undated, unchanged behaviour -- every source is queried live.
+        When set, requires ``resolver``.
+    resolver : SourceResolver | None
+        Resolves ``opentargets`` and ``omnipath`` -- the sources that
+        feed the causal subgraph -- to their pinned snapshot for
+        ``as_of``. Resolved before any fetching begins, so a missing
+        snapshot is refused immediately rather than after minutes of
+        work against the other sources. It will not fall back to live
+        data.
 
     Returns
     -------
     DiseaseGraph
         Assembled graph with merged nodes and unified edges.
     """
+    if as_of is not None:
+        if resolver is None:
+            raise ValueError(
+                "build_disease_graph(as_of=...) requires a resolver: "
+                "a dated run cannot be built without one to pin "
+                "opentargets and omnipath to that date's snapshot."
+            )
+        # Resolve the pinned sources before any fetching begins. This
+        # is a fail-fast check, not a fallback -- a missing snapshot
+        # raises UnpinnedSourceError here rather than after the other
+        # six sources have already been queried.
+        resolver.resolve("opentargets", as_of)
+        resolver.resolve("omnipath", as_of)
+
     # ── Check cache first ─────────────────────────────────────
     if use_cache:
         cache = get_cache()
