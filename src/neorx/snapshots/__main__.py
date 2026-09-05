@@ -103,12 +103,23 @@ def _download(url: str) -> Path:
     """
     fd, tmp_name = tempfile.mkstemp(prefix="neorx-snapshot-")
     tmp_path = Path(tmp_name)
-    with requests.get(url, stream=True, timeout=120) as response:
-        response.raise_for_status()
-        with open(fd, "wb") as fh:
+    # `open(fd, ...)` is entered before the request so the descriptor is
+    # always owned by a context manager -- a failure at any point (the
+    # connection, `raise_for_status`, or a chunk write) closes it on the
+    # way out. `wrote` only flips once the whole body has been written;
+    # if it never does, the partial file is removed before re-raising, so
+    # a failed fetch leaves nothing on disk for the caller to clean up.
+    wrote = False
+    try:
+        with open(fd, "wb") as fh, requests.get(url, stream=True, timeout=120) as response:
+            response.raise_for_status()
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 fh.write(chunk)
-    return tmp_path
+        wrote = True
+        return tmp_path
+    finally:
+        if not wrote:
+            tmp_path.unlink(missing_ok=True)
 
 
 @app.command("build")
@@ -174,15 +185,32 @@ def build_cmd(
 def list_cmd(
     root: Path = typer.Option(Path("snapshots"), "--root", help="Snapshot store root."),
 ) -> None:
-    """List every built snapshot: source, release, rows, extractor version, digest."""
+    """List every built snapshot: source, release, rows, extractor version, digest.
+
+    A row built from an archive lacking a real consensus_direction column
+    (OmniPath's 2018 dump) is marked with a trailing `[synthesised-consensus]`
+    tag, and a one-line legend is printed after the table when any row
+    carries it -- recording the flag in the manifest and then hiding it
+    here would defeat the reason it is recorded at all.
+    """
     entries = read_manifest(root / "manifest.toml")
     if not entries:
         typer.echo("no snapshots built yet")
         return
+    any_synthesised = False
     for (source, release), entry in sorted(entries.items()):
+        tag = ""
+        if entry.synthesised_consensus:
+            any_synthesised = True
+            tag = " [synthesised-consensus]"
         typer.echo(
             f"{source:12} {release:10} rows={entry.rows:<8} "
-            f"extractor_version={entry.extractor_version} sha256={entry.sha256[:12]}"
+            f"extractor_version={entry.extractor_version} sha256={entry.sha256[:12]}{tag}"
+        )
+    if any_synthesised:
+        typer.echo(
+            "[synthesised-consensus]: consensus_direction was not present in the "
+            "source and was derived rather than read."
         )
 
 
