@@ -62,6 +62,13 @@ def census_row(store: SnapshotStore, release: str) -> dict:
     ``0.0`` is reported for ``median_frame_size`` when no disease in the
     release carries genetic evidence -- an empty release is a finding
     ("this release evidences nothing"), not a division-by-zero error.
+
+    Note that ``n_genetic_target_disease_pairs`` is scoped to the genetic
+    subset only. The pair count for the whole extract, without the genetic
+    filter, is not produced here, as only the genetic subset is used
+    downstream (task 5's trial data is not yet available to apply the
+    Phase II filter, so these counts are an upper bound on the eventual
+    corpus).
     """
     associations = store.associations(release)
     n_diseases_total = int(associations["disease_id"].n_unique())
@@ -74,7 +81,7 @@ def census_row(store: SnapshotStore, release: str) -> dict:
         "n_diseases_total": n_diseases_total,
         "n_diseases_with_genetic_evidence": len(genetic_diseases),
         "median_frame_size": float(statistics.median(frame_sizes)) if frame_sizes else 0.0,
-        "n_target_disease_pairs": sum(frame_sizes),
+        "n_genetic_target_disease_pairs": sum(frame_sizes),
     }
 
 
@@ -83,6 +90,15 @@ def census_row(store: SnapshotStore, release: str) -> dict:
     help="Per-release disease counts: an upper bound on the corpus, pending Phase II data.",
 )
 def corpus_census(record: RunRecord) -> None:
+    """Record the corpus census for all tracked releases.
+
+    This experiment measures the first corpus criterion: genetic evidence in
+    the pinned release. The second criterion -- at least one target that
+    reached Phase II or beyond -- requires sub-project 5's trial data, which
+    does not exist yet. The counts recorded here are therefore an UPPER BOUND
+    on the eventual corpus: applying the Phase II filter can only shrink
+    these numbers, never grow them.
+    """
     store = SnapshotStore(STORE_ROOT)
     for release in RELEASES:
         record.append_row(census_row(store, release))

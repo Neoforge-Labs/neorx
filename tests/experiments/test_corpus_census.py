@@ -67,7 +67,7 @@ def test_counts_distinct_target_disease_pairs_not_rows(tmp_path):
             _row("A", "EFO_1", datatype="somatic_mutation"),
         ],
     )
-    assert census_row(store, "18.06")["n_target_disease_pairs"] == 1
+    assert census_row(store, "18.06")["n_genetic_target_disease_pairs"] == 1
 
 
 def test_an_empty_release_reports_zeros_not_an_error(tmp_path):
@@ -75,3 +75,30 @@ def test_an_empty_release_reports_zeros_not_an_error(tmp_path):
     row = census_row(store, "18.06")
     assert row["n_diseases_with_genetic_evidence"] == 0
     assert row["median_frame_size"] == 0.0
+
+
+def test_pair_count_spans_genetic_subset_only(tmp_path):
+    # The pair count is scoped to the genetic subset: a fixture with both
+    # genetic and literature-only associations for different diseases must
+    # not count the literature-only pairs. This guards against inadvertent
+    # "fixes" that broaden the scope to the whole extract, since the genetic
+    # criterion is the only admissible evidence downstream (Phase II data
+    # from task 5 is not yet available, so this count is an upper bound).
+    store = _store(
+        tmp_path,
+        [
+            # Genetic pairs: 2 for EFO_1, 1 for EFO_2
+            _row("A", "EFO_1", datatype="genetic_association"),
+            _row("B", "EFO_1", datatype="genetic_association"),
+            _row("C", "EFO_2", datatype="genetic_association"),
+            # Literature pairs (not counted): 2 for EFO_3
+            _row("D", "EFO_3", datatype="literature"),
+            _row("E", "EFO_3", datatype="literature"),
+        ],
+    )
+    row = census_row(store, "18.06")
+    # Only 2 diseases have genetic evidence
+    assert row["n_diseases_with_genetic_evidence"] == 2
+    # Only 3 genetic pairs are counted; the 2 literature-only pairs for EFO_3
+    # are not included
+    assert row["n_genetic_target_disease_pairs"] == 3
