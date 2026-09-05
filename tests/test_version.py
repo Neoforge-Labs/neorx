@@ -12,5 +12,5 @@ def test_version_matches_pyproject():
     assert neorx.__version__ == declared
 
 
-def test_version_is_0_2_0():
-    assert neorx.__version__ == "0.2.0"
+def test_version_is_0_3_0():
+    assert neorx.__version__ == "0.3.0"

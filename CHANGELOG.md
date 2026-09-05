@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-05
+
+This release exists because 0.2.0 reported numbers that no data supported.
+Anyone who installed 0.2.0 should upgrade; that version is yanked.
+
+### Removed
+
+- **Breaking:** `NeoRxResult.causal_effect` and `NeoRxResult.confidence_interval`,
+  and `CounterfactualResult.confidence_interval`. Neither confidence interval was
+  a bootstrap. Both resampled nothing: they added `rng.normal(0, 0.05)` and
+  `rng.normal(0, 0.03)` to deterministic scores and took percentiles, so every
+  interval NeoRx ever reported was a readout of those two constants. The effect
+  size was a product of heuristic factors, and the p-value derived from it had
+  no null distribution behind it. All are deleted rather than deprecated, and a
+  CI gate fails if any of the names return.
+- `robustness_score` and the leave-one-source-out sensitivity analysis are
+  **not** affected — that measurement is real and unchanged.
+- **Breaking:** the `genmol`, `dockbot`, `causalbiorl` and `mirrorfold` console
+  scripts, deprecated in 0.2.0 and removed here as that release promised. Every
+  one remains reachable as a subcommand — `neorx genmol`, `neorx dockbot`, and
+  so on — or as `python -m neorx.<package>`.
+
+### Fixed
+
+- **The backdoor criterion is now actually applied.** `identifier.py` called
+  `nx.d_separated`, removed from NetworkX, so it raised on every invocation and
+  an `except Exception: pass` swallowed it. Identifiability was really
+  `len(causal_pathway) > 0` — "some path exists" — and the adjustment set
+  computed alongside it was never consulted. Identification now runs on a typed
+  causal subgraph and reports one of seven explicit verdicts with the adjustment
+  set that justifies it.
+- **The RL pipeline had never produced a candidate.** Three faults compounded:
+  the planner's reward function was `None` at construction, so its CEM returned
+  random latents; the candidate-extraction loop read an `env._target_states`
+  attribute that never existed, raising on every run behind a broad `except`
+  that logged "collecting partial results" and continued with an empty list; and
+  any surviving candidate carried hardcoded `qed_score=0.5` and `sa_score=5.0`.
+- **Edge collisions no longer depend on insertion order.** STRING and OmniPath
+  both describe protein relationships, and a `DiGraph` holds one edge per node
+  pair, so a causal edge could be silently overwritten by an associational one.
+  Resolution is now explicit: causal-admissible beats associational, heavier
+  weight breaks ties, and provenance is unioned across colliding edges.
+- Multi-source corroboration counted aggregators as independent sources, so
+  OmniPath re-reporting a STRING interaction counted twice. It now counts
+  distinct primary sources.
+
+### Added
+
+- OmniPath as a data source — the only directed, signed gene-to-gene edges in
+  the system. Edges are admitted only when the interaction is directed with a
+  consensus direction.
+- Gene-to-disease edges carry an evidence class, and only genetic association or
+  somatic mutation is admitted as causal, on the Mendelian randomisation warrant.
+- Per-disease identifiability metrics in the run record: the non-trivial rate,
+  the trivial rate reported separately, the cyclic fraction, and a
+  confounding-sensitivity count. Trivial and non-trivial are kept apart because
+  a knowledge graph is open-world — an absent confounder is absent knowledge,
+  not absent confounding.
+
+### Note on prior results
+
+Figures and tables produced with 0.2.0 or earlier cannot be reproduced by this
+release, and should not be. They came from an engine that never executed the
+criterion it described. The `v0.1.0-paper` tag preserves the state those
+manuscripts describe.
+
+
 ## [0.2.0] — 2026-09-02
 
 ### Changed

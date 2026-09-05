@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "neorx"
-version = "0.2.0"
+version = "0.3.0"
 description = "Causal drug target discovery via Pearl's do-calculus — distinguishes genuine causal targets from correlational bystanders"
 readme = "README.md"
 license = "LicenseRef-NeoRx-NonCommercial"
@@ -123,11 +123,9 @@ mirror = ["fair-esm>=2.0"]
 
 [project.scripts]
 neorx = "neorx.cli:main"
-# Deprecated aliases, removed in 0.3.0.
-genmol = "neorx.genmol.__main__:main"
-dockbot = "neorx.dockbot.__main__:main"
-causalbiorl = "neorx.causalbiorl.__main__:main"
-mirrorfold = "neorx.mirrorfold.__main__:main"
+# The genmol / dockbot / causalbiorl / mirrorfold console scripts were
+# deprecated in 0.2.0 and removed here, as that release promised. Each
+# is reachable as a subcommand of `neorx`, or as `python -m neorx.<pkg>`.
 
 [tool.hatch.build]
 artifacts = ["src/neorx/genmol/assets/*.pt"]
