@@ -11,7 +11,12 @@ import polars as pl
 import pytest
 
 from neorx.snapshots.reader import SnapshotMissingError, SnapshotStore
-from neorx.snapshots.schema import ASSOCIATION_COLUMNS, empty_associations
+from neorx.snapshots.schema import (
+    ASSOCIATION_COLUMNS,
+    INTERACTION_COLUMNS,
+    empty_associations,
+    empty_interactions,
+)
 
 
 def _store(tmp_path, release="18.06", rows=None):
@@ -62,3 +67,75 @@ def test_an_empty_extract_is_distinguishable_from_a_missing_one(tmp_path):
     store = SnapshotStore(tmp_path)
     assert store.has("opentargets", "99.99") is True
     assert store.associations("99.99").height == 0
+
+
+def test_interactions_reads_back_what_was_written(tmp_path):
+    d = tmp_path / "omnipath" / "2024-01-15"
+    d.mkdir(parents=True)
+    df = pl.DataFrame(
+        [{
+            "source_symbol": "EGFR",
+            "target_symbol": "TP53",
+            "is_directed": True,
+            "consensus_direction": True,
+            "is_stimulation": False,
+            "is_inhibition": True,
+            "primary_sources": "SIGNOR",
+            "references": "PMID:12345",
+        }],
+        schema=INTERACTION_COLUMNS,
+    )
+    df.write_parquet(d / "interactions.parquet")
+    store = SnapshotStore(tmp_path)
+    result = store.interactions("2024-01-15")
+    assert result.height == 1
+    assert result.row(0, named=True)["source_symbol"] == "EGFR"
+
+
+def test_interactions_schema_matches_canonical(tmp_path):
+    d = tmp_path / "omnipath" / "2024-01-15"
+    d.mkdir(parents=True)
+    empty_interactions().write_parquet(d / "interactions.parquet")
+    store = SnapshotStore(tmp_path)
+    assert dict(store.interactions("2024-01-15").schema) == INTERACTION_COLUMNS
+
+
+def test_missing_interactions_raises_and_names_source_and_release(tmp_path):
+    d = tmp_path / "omnipath" / "2024-01-15"
+    d.mkdir(parents=True)
+    empty_interactions().write_parquet(d / "interactions.parquet")
+    store = SnapshotStore(tmp_path)
+    with pytest.raises(SnapshotMissingError, match="2024-02-01"):
+        store.interactions("2024-02-01")
+    with pytest.raises(SnapshotMissingError, match="omnipath"):
+        store.interactions("2024-02-01")
+
+
+def test_dispatch_to_interactions_not_associations(tmp_path):
+    """Verify that interactions() dispatch resolves to omnipath, not opentargets.
+
+    If _FILES["omnipath"] were incorrectly mapped to "associations.parquet",
+    this test would fail because an opentargets extract exists but should not
+    be visible to the omnipath source.
+    """
+    # Create only an opentargets extract in the same release
+    ot_d = tmp_path / "opentargets" / "2024-01-15"
+    ot_d.mkdir(parents=True)
+    ot_df = pl.DataFrame(
+        [{
+            "target_id": "ENSG1",
+            "target_symbol": "EGFR",
+            "disease_id": "EFO_1",
+            "datatype": "genetic_association",
+            "score": 0.5,
+        }],
+        schema=ASSOCIATION_COLUMNS,
+    )
+    ot_df.write_parquet(ot_d / "associations.parquet")
+
+    store = SnapshotStore(tmp_path)
+    # Omnipath should not be found for this release
+    assert store.has("omnipath", "2024-01-15") is False
+    # And interactions() should raise, not return the associations
+    with pytest.raises(SnapshotMissingError):
+        store.interactions("2024-01-15")
