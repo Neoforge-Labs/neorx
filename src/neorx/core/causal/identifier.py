@@ -157,7 +157,12 @@ def evaluate_all_targets(graph: DiseaseGraph) -> list[NeoRxResult]:
     )
 
     # Get candidate genes/proteins
-    candidates = _get_candidate_nodes(G, disease_node_id)
+    candidates, frame_excluded = _get_candidate_nodes(G, disease_node_id)
+    if frame_excluded:
+        logger.info(
+            "Frame gate excluded %d candidate nodes.",
+            len(frame_excluded),
+        )
     logger.info("Evaluating %d candidate targets…", len(candidates))
 
     # Count distinct sources that actually contributed gene/protein nodes
@@ -202,15 +207,51 @@ def _find_disease_node(G: nx.DiGraph, disease_name: str) -> str | None:
 
 
 def _get_candidate_nodes(
-    G: nx.DiGraph, disease_node_id: str,
-) -> list[str]:
-    """Get gene/protein nodes that could be drug targets."""
-    candidates = []
+    G: nx.DiGraph,
+    disease_node_id: str,
+    frame: frozenset[str] | None = None,
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Gene/protein nodes that could be drug targets, and what was excluded.
+
+    With no ``frame`` every eligible node is a candidate, which is the
+    undated behaviour and is unchanged.
+
+    With a ``frame`` -- the gene symbols the pinned release associated with
+    this disease on genetic evidence -- only nodes inside it are admitted.
+    This closes the sampling-frame leak: several sources add gene nodes for
+    the disease directly rather than from a requested gene list, so
+    restricting what is fetched does not restrict what becomes a candidate.
+
+    Exclusion is not an error. Monarch and ChEMBL legitimately return genes
+    OpenTargets did not, so refusing would fail every dated run for a
+    condition that is normal. What makes filtering safe is the second
+    return value: every excluded node is named with the source that
+    contributed it, so a run that suddenly excludes far more than it used
+    to is visible in the record rather than absorbed silently.
+    """
+    candidates: list[str] = []
+    excluded: list[dict[str, str]] = []
+
     for node_id, data in G.nodes(data=True):
         ntype = data.get("node_type", "")
-        if ntype in ("gene", "protein", "pathogen_gene") and node_id != disease_node_id:
-            candidates.append(node_id)
-    return candidates
+        if ntype not in ("gene", "protein", "pathogen_gene"):
+            continue
+        if node_id == disease_node_id:
+            continue
+
+        if frame is not None and data.get("name", "") not in frame:
+            excluded.append(
+                {
+                    "node_id": node_id,
+                    "symbol": data.get("name", ""),
+                    "source": data.get("source", ""),
+                }
+            )
+            continue
+
+        candidates.append(node_id)
+
+    return candidates, excluded
 
 
 def _evaluate_target(
