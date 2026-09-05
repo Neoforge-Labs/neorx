@@ -110,7 +110,10 @@ def build_disease_graph(
     allow_mocks : bool
         If *True*, data source clients may fall back to curated
         mock data when a live API call fails.  If *False*
-        (default), failed API calls produce empty results.
+        (default), failed API calls produce empty results. Refused
+        outright together with ``as_of``: curated mock data is a
+        measurement of no release, and a dated build would carry it as a
+        node score for the date.
     as_of : str | None
         A release date for a dated build. ``None`` (default) means
         undated, unchanged behaviour -- every source is queried live.
@@ -164,6 +167,14 @@ def build_disease_graph(
     ot_reader = None
     omnipath_reader = None
     if as_of is not None:
+        if allow_mocks:
+            raise ValueError(
+                f"build_disease_graph(as_of={as_of!r}, allow_mocks=True) is "
+                f"refused: mock data is a measurement of no release, and on "
+                f"a dated build it would enter the graph as a node score for "
+                f"{disease!r} as of {as_of}. Pass allow_mocks=False, or drop "
+                f"as_of."
+            )
         if resolver is None:
             raise ValueError(
                 "build_disease_graph(as_of=...) requires a resolver: "
@@ -451,7 +462,15 @@ def build_disease_graph(
 
     try:
         from neorx.core.graph.persistence import save_graph_to_db
-        save_graph_to_db(graph, params={"max_genes": max_genes})
+        # The upsert key is (disease_name, parameters). Without the date
+        # and the ontology id in there, a dated and a live build of the
+        # same disease are the same row and overwrite each other.
+        save_graph_to_db(graph, params={
+            "max_genes": max_genes,
+            "string_min_score": string_min_score,
+            "as_of": as_of,
+            "disease_id": disease_id,
+        })
     except Exception:
         pass
 

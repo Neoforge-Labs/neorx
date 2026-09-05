@@ -738,3 +738,40 @@ def test_the_dropped_nodes_are_counted_and_named(tmp_path, monkeypatch, caplog):
     assert "Monarch" in message
     assert "3" in message
 
+
+def test_a_dated_build_refuses_allow_mocks(tmp_path, monkeypatch):
+    """Curated mock data must not be able to become a 2018 node score."""
+    from neorx.core.graph.graph_builder import build_disease_graph
+
+    _stub_sources(monkeypatch)
+    _fresh_cache(tmp_path, monkeypatch)
+    resolver = _make_resolver(tmp_path / "snapshots")
+    with pytest.raises(ValueError, match="allow_mocks"):
+        build_disease_graph(
+            DISEASE, as_of="2018-06", resolver=resolver,
+            disease_id=DISEASE_ID, allow_mocks=True,
+        )
+
+
+def test_the_persisted_row_is_keyed_on_the_date_and_the_disease(
+    tmp_path, monkeypatch
+):
+    """A dated and a live build of one disease are different rows.
+
+    ``save_graph_to_db`` upserts on ``(disease_name, parameters)``, so a
+    parameters blob that does not name the date lets a live build
+    overwrite a dated one under the same key.
+    """
+    import neorx.core.graph.persistence as persistence
+
+    captured = []
+    monkeypatch.setattr(
+        persistence, "save_graph_to_db",
+        lambda graph, params=None: captured.append(dict(params or {})),
+    )
+    _dated_build(tmp_path, monkeypatch, live_nodes=True)
+
+    assert captured, "the graph was never handed to persistence"
+    assert captured[-1]["as_of"] == "2018-06"
+    assert captured[-1]["disease_id"] == DISEASE_ID
+    assert captured[-1]["max_genes"] == 20

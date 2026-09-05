@@ -215,8 +215,18 @@ def save_graph_to_db(
         return None
 
 
-def load_graph_from_db(disease: str) -> DiseaseGraph | None:
-    """Load the most recent graph for a disease from PostgreSQL.
+def load_graph_from_db(
+    disease: str,
+    *,
+    as_of: str | None = None,
+) -> DiseaseGraph | None:
+    """Load the most recent graph for a disease and date from PostgreSQL.
+
+    ``as_of`` selects which build is wanted: ``None`` (the default) is the
+    live, undated one, a date string is the dated build for that date.
+    Selecting on the name alone would hand back whichever of the two was
+    written last, and the caller could not tell which it got -- the same
+    collision ``save_graph_to_db``'s parameters key now separates.
 
     Returns
     -------
@@ -236,9 +246,10 @@ def load_graph_from_db(disease: str) -> DiseaseGraph | None:
             """
             SELECT graph_json FROM disease_graphs
             WHERE LOWER(disease_name) = LOWER(%s)
+              AND parameters ->> 'as_of' IS NOT DISTINCT FROM %s
             ORDER BY created_at DESC LIMIT 1
             """,
-            (disease,),
+            (disease, as_of),
         )
         row = cur.fetchone()
         cur.close()
@@ -246,7 +257,9 @@ def load_graph_from_db(disease: str) -> DiseaseGraph | None:
 
         if row:
             graph = DiseaseGraph.model_validate(row[0])
-            logger.info("Graph loaded from DB for '%s'.", disease)
+            logger.info(
+                "Graph loaded from DB for '%s' (as_of=%s).", disease, as_of,
+            )
             return graph
         return None
 
