@@ -7,8 +7,27 @@ is a pure function of already-parsed rows. A snapshot therefore feeds the
 same parser the live API does, and there is exactly one implementation of
 edge construction in the codebase rather than two that can drift apart.
 
-The archive's TSV schema is uniform across the range this project uses, so
-one reader covers every time point.
+Two archive-format quirks matter enough to be worth a comment:
+
+Boolean encoding differs by source era. The ARCHIVE writes ``is_directed``,
+``is_stimulation`` and ``is_inhibition`` as ``'1'``/``'0'``; the LIVE API
+writes the same flags as ``'True'``/``'False'``. Both encodings are
+normalised to real booleans in one place (``_to_bool``) rather than per
+column, and an unrecognised or empty value reads as False rather than
+null -- null is falsy in a way that silently drops rows instead of stating
+plainly that the source did not make a directedness claim.
+
+``consensus_direction`` does not exist in the 2018 archive column set at
+all. Sub-project 3's admissibility gate requires ``is_directed AND
+consensus_direction``; if a missing column simply meant False, every 2018
+edge would be rejected and the causal subgraph would have no gene-to-gene
+arrows at the earliest time point -- a wrong number that reads exactly
+like a real finding. The honest reading is that "directed" is the
+strongest directedness signal that era published, so where the column is
+absent we set ``consensus_direction`` equal to ``is_directed``. That is a
+weaker criterion than later eras provide, so ``read_archive_tsv`` reports
+back whether it synthesised the column: a caller has to look at that flag
+rather than being able to ignore the substitution silently.
 """
 
 from __future__ import annotations
@@ -21,30 +40,54 @@ from neorx.snapshots.schema import INTERACTION_COLUMNS, empty_interactions
 
 __all__ = ["read_archive_tsv", "to_interaction_rows"]
 
-_FLAGS = ("is_directed", "consensus_direction", "is_stimulation", "is_inhibition")
+# Both encodings observed across OmniPath sources: the archive's '1'/'0'
+# and the live API's 'True'/'False'. Anything else -- empty string,
+# missing value, unrecognised text -- is conservatively False, not null.
+_TRUTHY = {"1", "true"}
 
 
-def read_archive_tsv(text: str) -> pl.DataFrame:
+def _to_bool(flag: str) -> pl.Expr:
+    """Normalise a flag column's text encoding to a real boolean.
+
+    Case-insensitive; unrecognised or empty values become False rather
+    than null, so a bad or absent value states itself as "not claimed"
+    instead of silently disappearing from downstream boolean logic.
+    """
+    return pl.col(flag).fill_null("").str.to_lowercase().is_in(_TRUTHY).alias(flag)
+
+
+def read_archive_tsv(text: str) -> tuple[pl.DataFrame, bool]:
     """Parse an archived interactions TSV into the canonical schema.
 
-    The archive encodes booleans as 0/1 integers; they become real
-    booleans here so that downstream code never has to remember which
-    convention a given source used.
+    Returns ``(frame, consensus_direction_synthesised)``. The flag is
+    True when the source TSV had no ``consensus_direction`` column and
+    the reader set it equal to ``is_directed`` instead -- see the module
+    docstring for why that substitution is made and why it must be
+    visible to the caller rather than defaulted away.
     """
     raw = pl.read_csv(io.StringIO(text), separator="\t", infer_schema_length=0)
     if raw.height == 0:
-        return empty_interactions()
+        return empty_interactions(), "consensus_direction" not in raw.columns
 
-    return raw.select(
+    synthesised = "consensus_direction" not in raw.columns
+    consensus_expr = (
+        _to_bool("is_directed").alias("consensus_direction")
+        if synthesised
+        else _to_bool("consensus_direction")
+    )
+
+    df = raw.select(
         pl.col("source_genesymbol").alias("source_symbol"),
         pl.col("target_genesymbol").alias("target_symbol"),
-        *[
-            (pl.col(flag).cast(pl.Int8, strict=False) == 1).alias(flag)
-            for flag in _FLAGS
-        ],
+        _to_bool("is_directed"),
+        consensus_expr,
+        _to_bool("is_stimulation"),
+        _to_bool("is_inhibition"),
         pl.col("sources").fill_null("").alias("primary_sources"),
         pl.col("references").fill_null("").alias("references"),
     ).cast(INTERACTION_COLUMNS)
+
+    return df, synthesised
 
 
 def to_interaction_rows(df: pl.DataFrame) -> list[dict]:
