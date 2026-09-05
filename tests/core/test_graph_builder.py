@@ -74,9 +74,17 @@ class TestDiseaseGraphToNetworkx:
         G = disease_graph_to_networkx(hiv_graph)
         assert len(G.nodes) == len(hiv_graph.nodes)
 
-    def test_conversion_preserves_edges(self, hiv_graph):
+    def test_conversion_preserves_every_unique_edge_pair(self, hiv_graph):
+        # NOT a count comparison. A DiGraph holds one edge per node pair,
+        # and the assembled graph legitimately contains several edges for
+        # the same pair (STRING and OmniPath both describe protein
+        # relationships). Counts therefore differ whenever sources
+        # overlap; what must hold is that no PAIR is lost. See
+        # TestEdgeCollisionResolution for which edge survives.
         G = disease_graph_to_networkx(hiv_graph)
-        assert len(G.edges) == len(hiv_graph.edges)
+        assert set(G.edges()) == {
+            (e.source_id, e.target_id) for e in hiv_graph.edges
+        }
 
     def test_node_attributes(self, hiv_graph):
         G = disease_graph_to_networkx(hiv_graph)
@@ -153,3 +161,102 @@ class TestMergeNodes:
         ]
         _, merged_e = _merge_nodes([], edges)
         assert len(merged_e) == 2
+
+
+class TestEdgeCollisionResolution:
+    """A DiGraph cannot hold two edges between the same pair.
+
+    STRING and OmniPath both report protein relationships, so the same
+    gene pair frequently arrives twice: once as an undirected
+    ``interacts_with`` (not causal-admissible) and once as a directed,
+    signed regulatory edge (admissible). Only one survives the
+    conversion. Which one must be decided by an explicit rule, not by
+    the order the graph builder happens to append them in -- an
+    associational edge silently overwriting a causal one removes an
+    arrow from the causal subgraph, lowers the identifiability rate,
+    and looks like a finding rather than a bug.
+    """
+
+    @staticmethod
+    def _pair(*edges):
+        from neorx.core.graph.models import DiseaseGraph, GraphNode, NodeType
+
+        nodes = [
+            GraphNode(node_id=f"gene:{n}", name=n, node_type=NodeType.GENE,
+                      source="test", score=0.9)
+            for n in ("A", "B")
+        ]
+        return DiseaseGraph(disease_name="t", nodes=nodes, edges=list(edges))
+
+    @staticmethod
+    def _string_edge(weight=0.9):
+        from neorx.core.graph.models import EdgeType, GraphEdge
+        return GraphEdge(
+            source_id="gene:A", target_id="gene:B",
+            edge_type=EdgeType.INTERACTS_WITH, weight=weight,
+            source_db="STRING", primary_sources=["STRING"],
+        )
+
+    @staticmethod
+    def _omnipath_edge(weight=0.6):
+        from neorx.core.graph.models import EdgeType, GraphEdge
+        return GraphEdge(
+            source_id="gene:A", target_id="gene:B",
+            edge_type=EdgeType.ACTIVATES, weight=weight,
+            source_db="OmniPath", evidence_class="regulatory", sign=1,
+            primary_sources=["SIGNOR"],
+        )
+
+    def test_causal_edge_survives_regardless_of_insertion_order(self):
+        from neorx.core.causal.graph_semantics import is_causal_admissible
+
+        for label, edges in (
+            ("string first", (self._string_edge(), self._omnipath_edge())),
+            ("omnipath first", (self._omnipath_edge(), self._string_edge())),
+        ):
+            G = disease_graph_to_networkx(self._pair(*edges))
+            attrs = G.edges["gene:A", "gene:B"]
+            assert is_causal_admissible(attrs), (
+                f"{label}: an associational edge overwrote a causal one"
+            )
+            assert attrs["edge_type"] == "activates", label
+
+    def test_causal_edge_wins_even_when_the_associational_one_weighs_more(self):
+        # STRING's weight is higher, but weight never outranks admissibility.
+        from neorx.core.causal.graph_semantics import is_causal_admissible
+
+        G = disease_graph_to_networkx(
+            self._pair(self._omnipath_edge(weight=0.2), self._string_edge(weight=1.0))
+        )
+        assert is_causal_admissible(G.edges["gene:A", "gene:B"])
+
+    def test_colliding_edges_merge_their_primary_sources(self):
+        # Corroboration counts distinct primary evidence; a collision must
+        # not discard the losing edge's provenance.
+        G = disease_graph_to_networkx(
+            self._pair(self._string_edge(), self._omnipath_edge())
+        )
+        assert set(G.edges["gene:A", "gene:B"]["primary_sources"]) == {"STRING", "SIGNOR"}
+
+    def test_among_equally_admissible_edges_the_heavier_one_wins(self):
+        from neorx.core.graph.models import EdgeType, GraphEdge
+
+        light = GraphEdge(
+            source_id="gene:A", target_id="gene:B", edge_type=EdgeType.ACTIVATES,
+            weight=0.3, source_db="OmniPath", evidence_class="regulatory", sign=1,
+        )
+        heavy = GraphEdge(
+            source_id="gene:A", target_id="gene:B", edge_type=EdgeType.INHIBITS,
+            weight=0.95, source_db="OmniPath", evidence_class="regulatory", sign=-1,
+        )
+        G = disease_graph_to_networkx(self._pair(light, heavy))
+        assert G.edges["gene:A", "gene:B"]["weight"] == 0.95
+        assert G.edges["gene:A", "gene:B"]["sign"] == -1
+
+    def test_every_unique_pair_survives_the_conversion(self, hiv_graph):
+        # The real contract, replacing the old count-equality assertion:
+        # the conversion deduplicates by node pair, so edge COUNTS may
+        # differ, but no pair may be lost.
+        G = disease_graph_to_networkx(hiv_graph)
+        pairs = {(e.source_id, e.target_id) for e in hiv_graph.edges}
+        assert set(G.edges()) == pairs

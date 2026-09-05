@@ -320,20 +320,76 @@ def disease_graph_to_networkx(graph: DiseaseGraph) -> nx.DiGraph:
             metadata=dict(node.metadata),
         )
 
-    for edge in graph.edges:
-        G.add_edge(
-            edge.source_id,
-            edge.target_id,
-            edge_type=edge.edge_type.value,
-            weight=edge.weight,
-            source_db=edge.source_db,
-            evidence=edge.evidence or "",
-            evidence_class=edge.evidence_class,
-            sign=edge.sign,
-            primary_sources=list(edge.primary_sources),
-        )
+    for (source_id, target_id), attrs in _resolve_edge_collisions(graph.edges).items():
+        G.add_edge(source_id, target_id, **attrs)
 
     return G
+
+
+def _resolve_edge_collisions(
+    edges: list[GraphEdge],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Pick one edge per node pair, by an explicit rule.
+
+    A ``DiGraph`` holds at most one edge between two nodes, but the
+    assembled disease graph routinely contains several: STRING and
+    OmniPath both report protein relationships, so the same gene pair
+    arrives as an undirected ``interacts_with`` and again as a directed,
+    signed regulatory edge.
+
+    Left to ``add_edge``, the last writer would win and the outcome
+    would depend on the order the graph builder happens to append
+    sources in. That is not a tie-break, it is an accident: an
+    associational edge overwriting a causal one deletes an arrow from
+    the causal subgraph, which lowers the identifiability rate and
+    presents as a finding rather than as a bug.
+
+    So the rule is explicit and order-independent:
+
+    1. A causal-admissible edge always beats an associational one
+       (see :mod:`neorx.core.causal.graph_semantics`). Admissibility is
+       a claim about what the edge means; weight is only a confidence
+       in it, and no amount of confidence in an association promotes it
+       to a mechanism.
+    2. Between two edges of equal standing, the heavier wins.
+    3. ``primary_sources`` are unioned across every colliding edge
+       whatever the outcome, because corroboration counts distinct
+       primary evidence and a collision must not discard the loser's
+       provenance.
+    """
+    from neorx.core.causal.graph_semantics import is_causal_admissible
+
+    resolved: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for edge in edges:
+        key = (edge.source_id, edge.target_id)
+        attrs: dict[str, Any] = {
+            "edge_type": edge.edge_type.value,
+            "weight": edge.weight,
+            "source_db": edge.source_db,
+            "evidence": edge.evidence or "",
+            "evidence_class": edge.evidence_class,
+            "sign": edge.sign,
+            "primary_sources": list(edge.primary_sources),
+        }
+
+        incumbent = resolved.get(key)
+        if incumbent is None:
+            resolved[key] = attrs
+            continue
+
+        merged_sources = list(
+            dict.fromkeys(incumbent["primary_sources"] + attrs["primary_sources"])
+        )
+
+        challenger_rank = (is_causal_admissible(attrs), attrs["weight"])
+        incumbent_rank = (is_causal_admissible(incumbent), incumbent["weight"])
+
+        winner = attrs if challenger_rank > incumbent_rank else incumbent
+        winner["primary_sources"] = merged_sources
+        resolved[key] = winner
+
+    return resolved
 
 
 # ── Internal Helpers ────────────────────────────────────────────────
