@@ -185,8 +185,10 @@ def test_list_marks_a_synthesised_consensus_row(tmp_path):
     # there, not just recorded silently in the manifest.
     tsv = (
         "source\ttarget\tsource_genesymbol\ttarget_genesymbol\tis_directed\t"
-        "is_stimulation\tis_inhibition\tsources\treferences\tdip_url\tomnipath\n"
-        "P04626\tP01133\tERBB2\tEGF\t1\t1\t0\tSIGNOR\tSIGNOR:12345678\t\t1\n"
+        "is_stimulation\tis_inhibition\tsources\treferences\tdip_url\tomnipath\t"
+        "ncbi_tax_id_source\tncbi_tax_id_target\n"
+        "P04626\tP01133\tERBB2\tEGF\t1\t1\t0\tSIGNOR\tSIGNOR:12345678\t\t1\t"
+        "9606\t9606\n"
     )
     src = tmp_path / "omnipath_2018.tsv"
     src.write_text(tsv)

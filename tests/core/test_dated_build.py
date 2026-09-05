@@ -38,8 +38,17 @@ RELEASE = "18.06"
 # Genes that exist only in the snapshot, and genes that exist only in the
 # live clients. A dated build must contain the first and none of the
 # second.
-SNAPSHOT_GENES = ("CCR5", "CXCR4", "CONFND")
+SNAPSHOT_GENES = ("CCR5", "CXCR4", "CONFND", "C9orf72")
 LIVE_ONLY_GENE = "TODAYONLY"
+
+# A real HGNC symbol carrying lowercase, and a real ALS/FTD gene. The
+# release writes it the way HGNC does; ChEMBL upper-cases every symbol it
+# resolves (``chembl.py`` ``gs.upper()``). Node identity is the node id,
+# so ``gene:C9orf72`` and ``gene:C9ORF72`` are two nodes for one gene
+# unless every comparison between a frame and a node normalises the same
+# way. 15,603 of the 2018 OmniPath extract's 34,211 symbols carry
+# lowercase, and 872 of the human ones do.
+MIXED_CASE_GENE = "C9orf72"
 
 # The gene the release names as a regulator of CCR5. It is in the frame,
 # so it is the confounder the backdoor search has to adjust for, and the
@@ -54,6 +63,26 @@ CONFOUNDER_GENE = "CONFND"
 # release, read on its own terms for this disease, does not contain.
 LIVE_BRIDGE_GENE = "LIVEBRIDGE"
 LIVE_EXTRA_GENES = ("LIVEX1", "LIVEX2")
+
+# One off-frame gene-like node per unpinned source, so that deleting any
+# single source's restriction is visible. Before this file carried them,
+# ChEMBL -- the source the design notes single out as the worst offender,
+# because its score is 60% of today's ``max_phase`` -- had no off-frame
+# gene in any fixture, and STRING, KEGG and Reactome returned nothing at
+# all. Deleting their restrictions changed no test.
+CHEMBL_ONLY_GENE = "CHEMBLONLY"
+STRING_ONLY_PROTEIN = "STRINGONLY"
+KEGG_ONLY_GENE = "KEGGONLY"
+REACTOME_ONLY_GENE = "REACTONLY"
+
+# A pathogen target whose symbol *is* a frame gene's symbol. ChEMBL
+# namespaces the pathogen node's id (``pathogen:<organism>:<SYMBOL>``) but
+# leaves its ``name`` the bare symbol, so a frame check that reads the
+# name admits it whenever the human gene of the same name is in the
+# frame. P. falciparum DHFR and human DHFR are the real instance; CCR5 is
+# used here because it is already this fixture's frame gene.
+PATHOGEN_ORGANISM = "plasmodium_falciparum"
+PATHOGEN_SYMBOL = "CCR5"
 
 DISEASE_NODE_ID = f"disease:{DISEASE.lower().replace(' ', '_')}"
 
@@ -121,21 +150,27 @@ def _write_snapshot(root):
     pl.DataFrame(
         {
             "target_id": ["ENSG0000001", "ENSG0000001", "ENSG0000002",
-                          "ENSG0000003", "ENSG0000001", "ENSG0000004"],
+                          "ENSG0000003", "ENSG0000001", "ENSG0000004",
+                          "ENSG0000005"],
+            # The release writes C9orf72 the way HGNC does. Nothing in the
+            # pipeline may quietly re-case it: the symbol *is* half the
+            # node's identity.
             "target_symbol": ["CCR5", "CCR5", "CXCR4", "LITONLY", "CCR5",
-                              CONFOUNDER_GENE],
+                              CONFOUNDER_GENE, MIXED_CASE_GENE],
             # The fifth row is a DIFFERENT disease. It must not reach the
             # graph -- the build filters to DISEASE_ID -- but it must
             # reach CCR5's n_associated_diseases, which is a statement
             # about the release rather than about this disease.
-            "disease_id": [DISEASE_ID] * 4 + ["EFO_0000000", DISEASE_ID],
+            "disease_id": [DISEASE_ID] * 4 + ["EFO_0000000", DISEASE_ID,
+                                              DISEASE_ID],
             # CCR5 carries both a genetic and a non-genetic datatype, so
             # the breakdown has something to preserve and the node score
             # has something to pick out of it.
             "datatype": ["genetic_association", "known_drug",
                          "somatic_mutation", "literature",
-                         "genetic_association", "genetic_association"],
-            "score": [0.75, 0.90, 0.40, 0.99, 0.60, 0.55],
+                         "genetic_association", "genetic_association",
+                         "genetic_association"],
+            "score": [0.75, 0.90, 0.40, 0.99, 0.60, 0.55, 0.30],
         },
         schema=ASSOCIATION_COLUMNS,
     ).write_parquet(associations / "associations.parquet")
@@ -149,17 +184,23 @@ def _write_snapshot(root):
     # is the thing under test.
     pl.DataFrame(
         {
+            # The last row is the mixed-case gene's only arrow, and it is
+            # in the *source* column -- both columns are filtered, so both
+            # have to survive the comparison. The extract spells it the
+            # way the archive does; the 2018 dump holds `C9orf72` and does
+            # not hold `C9ORF72`.
             "source_symbol": ["CCR5", CONFOUNDER_GENE, "CXCR4",
-                              LIVE_BRIDGE_GENE],
-            "target_symbol": ["CXCR4", "CCR5", LIVE_BRIDGE_GENE, "CCR5"],
-            "is_directed": [True] * 4,
-            "consensus_direction": [True] * 4,
-            "is_stimulation": [False, True, True, True],
-            "is_inhibition": [True, False, False, False],
+                              LIVE_BRIDGE_GENE, MIXED_CASE_GENE],
+            "target_symbol": ["CXCR4", "CCR5", LIVE_BRIDGE_GENE, "CCR5",
+                              "CXCR4"],
+            "is_directed": [True] * 5,
+            "consensus_direction": [True] * 5,
+            "is_stimulation": [False, True, True, True, False],
+            "is_inhibition": [True, False, False, False, True],
             "primary_sources": ["SIGNOR;TRRUST", "SIGNOR", "SIGNOR",
-                                "SIGNOR"],
+                                "SIGNOR", "SIGNOR"],
             "references": ["SIGNOR:11111;TRRUST:22222", "SIGNOR:33333",
-                           "SIGNOR:44444", "SIGNOR:55555"],
+                           "SIGNOR:44444", "SIGNOR:55555", "SIGNOR:66666"],
         },
         schema=INTERACTION_COLUMNS,
     ).write_parquet(interactions / "interactions.parquet")
@@ -218,24 +259,109 @@ def _live_chembl_pair():
     score and the flag are statements about today's clinic, which is the
     outcome a dated build exists to predict.
     """
+    def _target(node_id, name, node_type, score, **extra):
+        return GraphNode(
+            node_id=node_id, name=name, node_type=node_type,
+            source="ChEMBL", score=score,
+            metadata={
+                "chembl_target_id": "CHEMBL2107",
+                "chembl_drug_evidence_score": score,
+                "clinical_phase": 4,
+                "has_known_drug": True,
+                "is_druggable": True,
+                "is_pathogen_target": False,
+                **extra,
+            },
+        )
+
+    nodes = [
+        _target("gene:CXCR4", "CXCR4", NodeType.GENE, 0.88),
+        # The mixed-case frame gene, upper-cased the way chembl.py
+        # upper-cases every symbol it resolves. Its *symbol* matches the
+        # frame; its *node id* does not, and node identity is the node id.
+        _target(f"gene:{MIXED_CASE_GENE.upper()}", MIXED_CASE_GENE.upper(),
+                NodeType.GENE, 0.80),
+        # A gene the release never associated with this disease. ChEMBL
+        # queries by disease rather than from a gene list, so it can and
+        # does introduce genes no gene-list restriction ever saw.
+        _target(f"gene:{CHEMBL_ONLY_GENE}", CHEMBL_ONLY_GENE,
+                NodeType.GENE, 0.92),
+        # A pathogen target whose bare symbol collides with a frame gene.
+        GraphNode(
+            node_id=f"pathogen:{PATHOGEN_ORGANISM}:{PATHOGEN_SYMBOL}",
+            name=PATHOGEN_SYMBOL, node_type=NodeType.PATHOGEN_GENE,
+            source="ChEMBL", score=0.80,
+            metadata={
+                "chembl_target_id": "CHEMBL1234",
+                "clinical_phase": 4,
+                "has_known_drug": True,
+                "is_pathogen_target": True,
+                "pathogen_organism": "Plasmodium falciparum",
+            },
+        ),
+    ]
+    edges = [
+        GraphEdge(
+            source_id=node.node_id, target_id=DISEASE_NODE_ID,
+            edge_type=EdgeType.ASSOCIATED_WITH, weight=node.score,
+            source_db="ChEMBL", evidence="ChEMBL max_phase 4",
+        )
+        for node in nodes
+    ]
+    return nodes, edges
+
+
+def _live_string_pair():
+    """What live STRING returns when it is allowed to contribute.
+
+    STRING nodes are ``NodeType.PROTEIN``, and STRING names them with its
+    own ``preferredName``, not with the symbol it was queried on -- so a
+    protein the release never associated with the disease reaches the
+    builder even though the gene list handed to STRING was the frame.
+    """
     node = GraphNode(
-        node_id="gene:CXCR4", name="CXCR4", node_type=NodeType.GENE,
-        source="ChEMBL", score=0.88,
-        metadata={
-            "chembl_target_id": "CHEMBL2107",
-            "chembl_drug_evidence_score": 0.88,
-            "clinical_phase": 4,
-            "has_known_drug": True,
-            "is_druggable": True,
-            "is_pathogen_target": False,
-        },
+        node_id=f"gene:{STRING_ONLY_PROTEIN}", name=STRING_ONLY_PROTEIN,
+        node_type=NodeType.PROTEIN, source="STRING", score=0.91,
     )
     edge = GraphEdge(
-        source_id=node.node_id, target_id=DISEASE_NODE_ID,
-        edge_type=EdgeType.ASSOCIATED_WITH, weight=0.88,
-        source_db="ChEMBL", evidence="ChEMBL max_phase 4",
+        source_id=node.node_id, target_id="gene:CCR5",
+        edge_type=EdgeType.INTERACTS_WITH, weight=0.91,
+        source_db="STRING", evidence="STRING combined score: 0.910",
     )
     return [node], [edge]
+
+
+def _live_pathway_pair(source_db, gene):
+    """A pathway source's contribution: a pathway, and an off-frame gene.
+
+    The restriction is a contract about what an *unpinned source* may add,
+    checked per source, not a statement about which node types today's
+    KEGG and Reactome clients happen to construct. A client that starts
+    returning gene nodes -- or a mock path, or a schema change upstream --
+    must not be able to widen a dated build's candidate population, and
+    the only way a test can say so is to hand the gate a gene node.
+    """
+    nodes = [
+        GraphNode(
+            node_id=f"pathway:{source_db.lower()}:1", name=f"{source_db} pathway",
+            node_type=NodeType.PATHWAY, source=source_db, score=0.8,
+        ),
+        GraphNode(
+            node_id=f"gene:{gene}", name=gene, node_type=NodeType.GENE,
+            source=source_db, score=0.8,
+        ),
+    ]
+    edges = [
+        GraphEdge(
+            source_id=f"gene:{gene}", target_id=f"pathway:{source_db.lower()}:1",
+            edge_type=EdgeType.PARTICIPATES_IN, weight=0.8, source_db=source_db,
+        ),
+        GraphEdge(
+            source_id="gene:CCR5", target_id=f"pathway:{source_db.lower()}:1",
+            edge_type=EdgeType.PARTICIPATES_IN, weight=0.8, source_db=source_db,
+        ),
+    ]
+    return nodes, edges
 
 
 def _stub_sources(monkeypatch, *, live_nodes=False):
@@ -307,9 +433,30 @@ def _stub_sources(monkeypatch, *, live_nodes=False):
         graph_builder, "query_chembl",
         _live_chembl if live_nodes else _empty_pair,
     )
-    monkeypatch.setattr(graph_builder, "query_kegg_pathways", _empty_pair)
-    monkeypatch.setattr(graph_builder, "query_reactome_pathways", _empty_pair)
-    monkeypatch.setattr(graph_builder, "query_string_interactions", _empty_pair)
+    def _live_kegg(*_args, **_kwargs):
+        calls["n"] += 1
+        return _live_pathway_pair("KEGG", KEGG_ONLY_GENE)
+
+    def _live_reactome(*_args, **_kwargs):
+        calls["n"] += 1
+        return _live_pathway_pair("Reactome", REACTOME_ONLY_GENE)
+
+    def _live_string(*_args, **_kwargs):
+        calls["n"] += 1
+        return _live_string_pair()
+
+    monkeypatch.setattr(
+        graph_builder, "query_kegg_pathways",
+        _live_kegg if live_nodes else _empty_pair,
+    )
+    monkeypatch.setattr(
+        graph_builder, "query_reactome_pathways",
+        _live_reactome if live_nodes else _empty_pair,
+    )
+    monkeypatch.setattr(
+        graph_builder, "query_string_interactions",
+        _live_string if live_nodes else _empty_pair,
+    )
     monkeypatch.setattr(graph_builder, "query_omnipath", _live_omnipath)
     monkeypatch.setattr(graph_builder, "query_uniprot", _empty_dict)
     monkeypatch.setattr(graph_builder, "query_pdb_structures", _empty_dict)
@@ -462,10 +609,14 @@ def test_the_dated_omnipath_edges_come_from_the_snapshot(tmp_path, monkeypatch):
     # LIVEBRIDGE -> CCR5; neither may appear, because LIVEBRIDGE is not
     # one of those genes.
     assert sorted((e.source_id, e.target_id) for e in regulatory) == [
+        (f"gene:{MIXED_CASE_GENE}", "gene:CXCR4"),
         ("gene:CCR5", "gene:CXCR4"),
         (f"gene:{CONFOUNDER_GENE}", "gene:CCR5"),
     ]
-    inhibition = next(e for e in regulatory if e.target_id == "gene:CXCR4")
+    inhibition = next(
+        e for e in regulatory
+        if e.target_id == "gene:CXCR4" and e.source_id == "gene:CCR5"
+    )
     assert inhibition.edge_type == EdgeType.INHIBITS
     assert inhibition.sign == -1
     assert inhibition.primary_sources == ["SIGNOR", "TRRUST"]
@@ -717,6 +868,7 @@ def test_live_genes_cannot_displace_frame_genes_from_the_cap(
         for e in graph.edges if e.source_db == "OmniPath"
     )
     assert regulatory == [
+        (f"gene:{MIXED_CASE_GENE}", "gene:CXCR4"),
         ("gene:CCR5", "gene:CXCR4"),
         (f"gene:{CONFOUNDER_GENE}", "gene:CCR5"),
     ]
@@ -737,6 +889,144 @@ def test_the_dropped_nodes_are_counted_and_named(tmp_path, monkeypatch, caplog):
     message = " ".join(dropped)
     assert "Monarch" in message
     assert "3" in message
+
+
+# ── One identity rule, checked at every source ──────────────────────
+#
+# Everything in this block is the same defect seen from a different
+# side: the frame gate was enforced on a bare symbol string while node
+# identity is a node id, and the two normalise differently.
+
+
+def test_an_off_frame_chembl_gene_does_not_become_a_node(tmp_path, monkeypatch):
+    """ChEMBL is the source with the worst leak and had no fixture for it.
+
+    Its score is 60% of today's ``max_phase`` -- the clinical outcome a
+    dated build exists to predict -- and it queries by disease, so no
+    gene-list restriction constrains which genes it returns.
+    """
+    graph, _calls = _dated_build(tmp_path, monkeypatch, live_nodes=True)
+    assert CHEMBL_ONLY_GENE not in {n.name for n in graph.nodes}
+    assert f"gene:{CHEMBL_ONLY_GENE}" not in {n.node_id for n in graph.nodes}
+
+
+def test_an_off_frame_string_protein_does_not_become_a_node(
+    tmp_path, monkeypatch
+):
+    """A protein node is a candidate too, not enrichment hanging off one.
+
+    ``_get_candidate_nodes`` admits ``protein`` alongside ``gene``, so a
+    node type narrower than that in the restriction is a hole rather than
+    a simplification.
+    """
+    graph, _calls = _dated_build(tmp_path, monkeypatch, live_nodes=True)
+    assert STRING_ONLY_PROTEIN not in {n.name for n in graph.nodes}
+    node_ids = {n.node_id for n in graph.nodes}
+    for edge in graph.edges:
+        assert edge.source_id in node_ids
+        assert edge.target_id in node_ids
+
+
+def test_an_off_frame_pathway_source_gene_does_not_become_a_node(
+    tmp_path, monkeypatch
+):
+    graph, _calls = _dated_build(tmp_path, monkeypatch, live_nodes=True)
+    names = {n.name for n in graph.nodes}
+    assert KEGG_ONLY_GENE not in names
+    assert REACTOME_ONLY_GENE not in names
+    # The pathways themselves are enrichment and stay: the rule restricts
+    # the candidate population, it does not switch the sources off.
+    assert any(n.node_type == NodeType.PATHWAY for n in graph.nodes)
+
+
+def test_a_mixed_case_frame_gene_is_one_node_at_the_pinned_score(
+    tmp_path, monkeypatch
+):
+    """The gene is in the frame, so ChEMBL may enrich it -- not duplicate it.
+
+    ChEMBL reports ``gene:C9ORF72`` at 0.80 with ``clinical_phase`` 4.
+    The frame gate reads the *symbol*, which matches; ``_merge_nodes``
+    merges on the *node id*, which does not. The result is two nodes for
+    one gene, the second carrying today's clinical phase as its score in a
+    2018 graph.
+    """
+    graph, _calls = _dated_build(tmp_path, monkeypatch, live_nodes=True)
+    for_gene = [
+        n for n in graph.nodes
+        if n.node_id.lower() == f"gene:{MIXED_CASE_GENE}".lower()
+    ]
+    assert len(for_gene) == 1, [n.node_id for n in for_gene]
+    node = for_gene[0]
+    # The release's spelling and the release's score survive.
+    assert node.node_id == f"gene:{MIXED_CASE_GENE}"
+    assert node.name == MIXED_CASE_GENE
+    assert node.score == pytest.approx(0.30)
+    assert node.metadata["snapshot_release"] == RELEASE
+    # And ChEMBL's contribution arrived as enrichment on that one node,
+    # rather than being dropped: a comparison that refuses the match is
+    # not a fix, it is symptom 3.
+    assert node.metadata["chembl_target_id"] == "CHEMBL2107"
+
+
+def test_a_mixed_case_frame_gene_keeps_its_pinned_arrows(tmp_path, monkeypatch):
+    """The regulatory layer identifiability is computed from.
+
+    ``_extract_gene_symbols`` upper-cases every symbol and the pinned
+    OmniPath filter is an exact ``is_in``, so a symbol the release spells
+    with lowercase is asked for in a form the extract does not contain and
+    loses every arrow it has -- silently. The 2018 dump holds 321 C#orf#
+    symbols and 872 mixed-case human symbols in total.
+    """
+    graph, _calls = _dated_build(tmp_path, monkeypatch, live_nodes=True)
+    regulatory = [
+        (e.source_id, e.target_id)
+        for e in graph.edges if e.source_db == "OmniPath"
+    ]
+    assert (f"gene:{MIXED_CASE_GENE}", "gene:CXCR4") in regulatory
+
+
+def test_a_pathogen_target_is_excluded_even_when_its_symbol_collides(
+    tmp_path, monkeypatch
+):
+    """"A dated build therefore has no pathogen targets" -- module docstring.
+
+    ChEMBL namespaces the pathogen node's id but leaves ``name`` the bare
+    symbol, and the frame check reads ``name``. So a pathogen target whose
+    symbol happens to be a frame gene's symbol is admitted, and is never
+    counted as dropped. Excluding by node type is what actually holds.
+    """
+    graph, _calls = _dated_build(tmp_path, monkeypatch, live_nodes=True)
+    assert all(
+        n.node_type != NodeType.PATHOGEN_GENE for n in graph.nodes
+    ), [n.node_id for n in graph.nodes if n.node_type == NodeType.PATHOGEN_GENE]
+    assert f"pathogen:{PATHOGEN_ORGANISM}:{PATHOGEN_SYMBOL}" not in {
+        n.node_id for n in graph.nodes
+    }
+    # And the human gene of the same name kept the release's score rather
+    # than the pathogen target's 0.80.
+    ccr5 = next(n for n in graph.nodes if n.node_id == "gene:CCR5")
+    assert ccr5.score == pytest.approx(0.75)
+
+
+def test_the_pathogen_exclusion_is_counted_like_any_other(
+    tmp_path, monkeypatch, caplog
+):
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="neorx.core.graph.graph_builder"):
+        _dated_build(tmp_path, monkeypatch, live_nodes=True)
+
+    # Not merely "pathogen appears somewhere in the log": the per-source
+    # line already says how many pathogen nodes ChEMBL returned. What must
+    # be visible is that they were *excluded*, with a count.
+    excluded = [
+        r.getMessage() for r in caplog.records
+        if "excluded" in r.getMessage() and "pathogen" in r.getMessage()
+    ]
+    assert excluded, "pathogen nodes were dropped without saying so"
+    message = " ".join(excluded)
+    assert "ChEMBL" in message
+    assert f"pathogen:{PATHOGEN_ORGANISM}:{PATHOGEN_SYMBOL}" in message
 
 
 def test_a_dated_build_refuses_allow_mocks(tmp_path, monkeypatch):
@@ -775,3 +1065,113 @@ def test_the_persisted_row_is_keyed_on_the_date_and_the_disease(
     assert captured[-1]["as_of"] == "2018-06"
     assert captured[-1]["disease_id"] == DISEASE_ID
     assert captured[-1]["max_genes"] == 20
+
+
+# ── The same identity rule, at the identifier's own frame ───────────
+
+
+def test_the_identifier_frame_matches_a_mixed_case_symbol():
+    """``candidate_frame`` is a different frame, compared in the same form.
+
+    It is drawn from the extract's ``target_symbol`` column while the node
+    carries whatever spelling the source that built it used, and the
+    comparison here was case-*sensitive* while the builder's was
+    case-blind. A gene could therefore pass one gate and fail the other.
+    """
+    nodes = [
+        GraphNode(node_id=f"gene:{MIXED_CASE_GENE.upper()}",
+                  name=MIXED_CASE_GENE.upper(), node_type=NodeType.GENE,
+                  source="ChEMBL", score=0.9),
+        GraphNode(node_id="disease:d", name="d", node_type=NodeType.DISEASE,
+                  source="NeoRx", score=1.0),
+    ]
+    edges = [
+        GraphEdge(source_id=nodes[0].node_id, target_id="disease:d",
+                  edge_type=EdgeType.ASSOCIATED_WITH, weight=0.9,
+                  source_db="Open Targets",
+                  evidence_class="genetic_association"),
+    ]
+    graph = DiseaseGraph(disease_name="d", disease_id="disease:d",
+                         nodes=nodes, edges=edges)
+    results = identify_causal_targets(
+        graph, top_n=10, frame=frozenset({MIXED_CASE_GENE}),
+    )
+    assert [r.gene_name for r in results] == [MIXED_CASE_GENE.upper()]
+
+
+def test_the_identifier_frame_still_excludes_a_gene_that_is_not_in_it():
+    """Case-insensitive is not the same as permissive."""
+    results = identify_causal_targets(
+        _graph_with_an_off_frame_gene(), top_n=10,
+        frame=frozenset({"pik3ca"}),
+    )
+    assert [r.gene_name for r in results] == ["PIK3CA"]
+
+
+# ── The two claims the previous round made and did not test ─────────
+
+
+def test_merging_does_not_reach_back_into_the_source_nodes_metadata():
+    """``_merge_nodes`` copies deeply, and something has to say why.
+
+    With a shallow copy the merged node shares its ``metadata`` dict with
+    the node it was copied from, so "a pinned node keeps its metadata" is
+    true only by accident: the live source's keys land in the pinned
+    node's own dict as well, and any later reader of that node -- the
+    source list it came from is still live in the builder -- sees them.
+    """
+    from neorx.core.graph.graph_builder import _merge_nodes
+
+    pinned = GraphNode(
+        node_id="gene:CCR5", name="CCR5", node_type=NodeType.GENE,
+        source="Open Targets", score=0.75,
+        metadata={"snapshot_release": RELEASE, "datatype_scores": {"a": 0.75}},
+    )
+    live = GraphNode(
+        node_id="gene:CCR5", name="CCR5", node_type=NodeType.GENE,
+        source="ChEMBL", score=0.88,
+        metadata={"clinical_phase": 4},
+    )
+
+    merged, _edges = _merge_nodes([pinned, live], [])
+
+    assert "clinical_phase" not in pinned.metadata
+    assert pinned.metadata["datatype_scores"] == {"a": 0.75}
+    assert merged[0].metadata is not pinned.metadata
+    assert merged[0].metadata["datatype_scores"] is not pinned.metadata[
+        "datatype_scores"
+    ]
+
+
+def test_uniprot_enrichment_cannot_overwrite_what_a_release_said():
+    """This runs before ``_merge_nodes``, i.e. outside its protection.
+
+    Today UniProt only adds keys a snapshot node does not carry, so
+    nothing changes -- but it assigns with ``=``, and a key name
+    coinciding is all it would take for a live answer to become the
+    release's.
+    """
+    from neorx.core.graph.graph_builder import _enrich_nodes_with_uniprot
+
+    pinned = GraphNode(
+        node_id="gene:CCR5", name="CCR5", node_type=NodeType.GENE,
+        source="Open Targets", score=0.75,
+        metadata={"snapshot_release": RELEASE, "is_druggable": False},
+    )
+    live = GraphNode(
+        node_id="gene:CXCR4", name="CXCR4", node_type=NodeType.GENE,
+        source="Monarch", score=0.85,
+        metadata={"is_druggable": False},
+    )
+    info = {"is_druggable": True, "subcellular_location": "membrane",
+            "go_terms": ["GO:1"]}
+
+    _enrich_nodes_with_uniprot([pinned, live], {"ccr5": info, "CXCR4": info})
+
+    # Keyed through the same normalisation as everything else, so the
+    # lower-cased key still found the node.
+    assert pinned.metadata["subcellular_location"] == "membrane"
+    # ... but the release's own answer stands.
+    assert pinned.metadata["is_druggable"] is False
+    # An unpinned node is enriched exactly as before.
+    assert live.metadata["is_druggable"] is True

@@ -6,13 +6,20 @@ parsed rows. That is what lets a snapshot feed the same parser as the live
 API with no second implementation of edge construction, so this reader's
 only job is to produce rows in that exact shape.
 
-Two real-data defects drive most of the tests below:
+Three real-data defects drive most of the tests below:
 
 - The ARCHIVE encodes booleans as '1'/'0'; the LIVE API encodes them as
   'True'/'False'. Both must parse to real booleans, not null.
 - The 2018 archive has no `consensus_direction` column at all. Per T5,
   its absence is filled with `is_directed`, and the reader must tell the
   caller it did that rather than defaulting the flag away.
+- The archive is not human. 316,327 of the real 2018 dump's 644,845 rows
+  are mouse (242,338) or rat (73,989), the canonical schema carries
+  nothing that marks them, and the columns that would (`ncbi_tax_id_source`,
+  `ncbi_tax_id_target`) are dropped by the reader. So the filter has to
+  run here or not at all. Every fixture below therefore carries the tax
+  columns, because a fixture without them is a fixture of a file the
+  reader must refuse.
 """
 
 import polars as pl
@@ -22,9 +29,38 @@ from neorx.snapshots.schema import INTERACTION_COLUMNS
 
 TSV = (
     "source_genesymbol\ttarget_genesymbol\tis_directed\tconsensus_direction\t"
+    "is_stimulation\tis_inhibition\tsources\treferences\t"
+    "ncbi_tax_id_source\tncbi_tax_id_target\n"
+    "EGFR\tSHC1\t1\t1\t1\t0\tSIGNOR;TRRUST\tSIGNOR:16331690\t9606\t9606\n"
+    "TP53\tMDM2\t1\t1\t0\t1\tSIGNOR\tSIGNOR:14983059\t9606\t9606\n"
+)
+
+# The organism problem, in the four shapes it actually takes in the real
+# dump. Mouse `Trp53` also demonstrates why the case rule cannot land
+# without this filter: it matches human TP53 case-insensitively.
+TSV_MIXED_ORGANISM = (
+    "source_genesymbol\ttarget_genesymbol\tis_directed\tconsensus_direction\t"
+    "is_stimulation\tis_inhibition\tsources\treferences\t"
+    "ncbi_tax_id_source\tncbi_tax_id_target\n"
+    "EGFR\tSHC1\t1\t1\t1\t0\tSIGNOR\tSIGNOR:16331690\t9606\t9606\n"
+    # Mouse-mouse. This exact interaction (C3 -> C5) is one of the five
+    # directed non-human rows that pass an exact-case human symbol filter
+    # in the real 2018 dump.
+    "C3\tC5\t1\t1\t1\t0\tSIGNOR\tSIGNOR:11111111\t10090\t10090\n"
+    # Rat-rat, and one of the other four: F7 -> F10.
+    "F7\tF10\t1\t1\t1\t0\tSIGNOR\tSIGNOR:22222222\t10116\t10116\n"
+    # Mouse Title-case, which only a case-insensitive match would let in.
+    "Trp53\tMdm2\t1\t1\t0\t1\tSIGNOR\tSIGNOR:33333333\t10090\t10090\n"
+    # Cross-species: a mouse protein acting on a human one is not a human
+    # regulatory arrow, so one human endpoint is not enough.
+    "Egfr\tSHC1\t1\t1\t1\t0\tSIGNOR\tSIGNOR:44444444\t10090\t9606\n"
+)
+
+# The same columns as TSV, minus the two the organism filter reads.
+TSV_NO_ORGANISM_COLUMNS = (
+    "source_genesymbol\ttarget_genesymbol\tis_directed\tconsensus_direction\t"
     "is_stimulation\tis_inhibition\tsources\treferences\n"
     "EGFR\tSHC1\t1\t1\t1\t0\tSIGNOR;TRRUST\tSIGNOR:16331690\n"
-    "TP53\tMDM2\t1\t1\t0\t1\tSIGNOR\tSIGNOR:14983059\n"
 )
 
 # The real 2018 archive column set (omnipath_webservice_interactions__
@@ -33,23 +69,28 @@ TSV = (
 # included here, but they are the era's real shape.
 TSV_2018_NO_CONSENSUS = (
     "source\ttarget\tsource_genesymbol\ttarget_genesymbol\tis_directed\t"
-    "is_stimulation\tis_inhibition\tsources\treferences\tdip_url\tomnipath\n"
-    "P04626\tP01133\tERBB2\tEGF\t1\t1\t0\tSIGNOR\tSIGNOR:12345678\t\t1\n"
+    "is_stimulation\tis_inhibition\tsources\treferences\tdip_url\tomnipath\t"
+    "ncbi_tax_id_source\tncbi_tax_id_target\n"
+    "P04626\tP01133\tERBB2\tEGF\t1\t1\t0\tSIGNOR\tSIGNOR:12345678\t\t1\t"
+    "9606\t9606\n"
 )
 
 # The LIVE API's boolean encoding: 'True'/'False' text rather than '1'/'0'.
 TSV_LIVE_ENCODING = (
     "source_genesymbol\ttarget_genesymbol\tis_directed\tconsensus_direction\t"
-    "is_stimulation\tis_inhibition\tsources\treferences\n"
-    "EGFR\tSHC1\tTrue\tTrue\tTrue\tFalse\tSIGNOR;TRRUST\tSIGNOR:16331690\n"
-    "TP53\tMDM2\tTrue\tTrue\tFalse\tTrue\tSIGNOR\tSIGNOR:14983059\n"
+    "is_stimulation\tis_inhibition\tsources\treferences\t"
+    "ncbi_tax_id_source\tncbi_tax_id_target\n"
+    "EGFR\tSHC1\tTrue\tTrue\tTrue\tFalse\tSIGNOR;TRRUST\tSIGNOR:16331690\t"
+    "9606\t9606\n"
+    "TP53\tMDM2\tTrue\tTrue\tFalse\tTrue\tSIGNOR\tSIGNOR:14983059\t9606\t9606\n"
 )
 
 # An unrecognised / empty flag value must become False, not null.
 TSV_UNRECOGNISED_FLAG = (
     "source_genesymbol\ttarget_genesymbol\tis_directed\tconsensus_direction\t"
-    "is_stimulation\tis_inhibition\tsources\treferences\n"
-    "EGFR\tSHC1\tmaybe\t1\t\t0\tSIGNOR\tSIGNOR:16331690\n"
+    "is_stimulation\tis_inhibition\tsources\treferences\t"
+    "ncbi_tax_id_source\tncbi_tax_id_target\n"
+    "EGFR\tSHC1\tmaybe\t1\t\t0\tSIGNOR\tSIGNOR:16331690\t9606\t9606\n"
 )
 
 
@@ -91,10 +132,10 @@ def test_the_live_parser_accepts_those_rows_unchanged():
 
 def test_an_empty_tsv_yields_an_empty_frame_with_the_schema():
     header = TSV.split("\n")[0] + "\n"
-    df, synthesised = read_archive_tsv(header)
+    df, notes = read_archive_tsv(header)
     assert df.height == 0
     assert dict(df.schema) == INTERACTION_COLUMNS
-    assert synthesised is False
+    assert notes.consensus_direction_synthesised is False
 
 
 # --- C1: boolean encoding differs between the archive and the live API ---
@@ -146,9 +187,9 @@ def test_live_encoding_feeds_the_live_parser_and_produces_edges():
 
 
 def test_missing_consensus_direction_column_parses_without_raising():
-    df, synthesised = read_archive_tsv(TSV_2018_NO_CONSENSUS)
+    df, notes = read_archive_tsv(TSV_2018_NO_CONSENSUS)
     assert dict(df.schema) == INTERACTION_COLUMNS
-    assert synthesised is True
+    assert notes.consensus_direction_synthesised is True
 
 
 def test_missing_consensus_direction_is_set_equal_to_is_directed():
@@ -159,17 +200,88 @@ def test_missing_consensus_direction_is_set_equal_to_is_directed():
 
 
 def test_present_consensus_direction_is_not_marked_synthesised():
-    _, synthesised = read_archive_tsv(TSV)
-    assert synthesised is False
+    _, notes = read_archive_tsv(TSV)
+    assert notes.consensus_direction_synthesised is False
 
 
 def test_synthesised_2018_rows_still_reach_the_live_parser():
     from neorx.core.sources.omnipath import _interactions_to_edges
 
-    df, synthesised = read_archive_tsv(TSV_2018_NO_CONSENSUS)
-    assert synthesised is True
+    df, notes = read_archive_tsv(TSV_2018_NO_CONSENSUS)
+    assert notes.consensus_direction_synthesised is True
     rows = to_interaction_rows(df)
     edges = _interactions_to_edges(rows, {"ERBB2", "EGF"})
     assert len(edges) == 1
     assert edges[0].source_id == "gene:ERBB2"
     assert edges[0].target_id == "gene:EGF"
+
+
+# --- C3: half the archive is mouse and rat ---
+
+
+def test_non_human_rows_do_not_reach_the_extract():
+    df, _ = read_archive_tsv(TSV_MIXED_ORGANISM)
+    assert df["source_symbol"].to_list() == ["EGFR"]
+    assert df["target_symbol"].to_list() == ["SHC1"]
+
+
+def test_a_cross_species_row_is_not_human_enough():
+    # One human endpoint is not a human regulatory arrow.
+    df, _ = read_archive_tsv(TSV_MIXED_ORGANISM)
+    assert ("Egfr", "SHC1") not in list(
+        zip(df["source_symbol"].to_list(), df["target_symbol"].to_list())
+    )
+
+
+def test_the_dropped_non_human_rows_are_counted():
+    # Filtering silently is the failure mode: an extract that quietly
+    # halved is indistinguishable from one that read half a file.
+    _, notes = read_archive_tsv(TSV_MIXED_ORGANISM)
+    assert notes.non_human_rows_dropped == 4
+
+
+def test_a_human_only_archive_reports_nothing_dropped():
+    _, notes = read_archive_tsv(TSV)
+    assert notes.non_human_rows_dropped == 0
+
+
+def test_a_mouse_symbol_cannot_be_reached_by_a_case_insensitive_match():
+    """Why the organism filter has to land before the case rule.
+
+    Mouse `Trp53` differs from human `TP53` only in case, and 15,603 of
+    the real dump's 34,211 symbols carry lowercase. Matching symbols
+    case-insensitively over an unfiltered extract imports the mouse
+    interactome into human causal graphs.
+    """
+    from neorx.core.sources.snapshot_sources import omnipath_from_snapshot
+
+    df, _ = read_archive_tsv(TSV_MIXED_ORGANISM)
+
+    class _Store:
+        def interactions(self, release):
+            return df
+
+        def associations(self, release):  # pragma: no cover - unused here
+            raise AssertionError("associations must not be read here")
+
+    _nodes, edges = omnipath_from_snapshot(
+        _Store(), "2018", ["TP53", "MDM2", "EGFR", "SHC1", "C3", "C5"]
+    )
+    assert sorted((e.source_id, e.target_id) for e in edges) == [
+        ("gene:EGFR", "gene:SHC1"),
+    ]
+
+
+def test_an_archive_without_organism_columns_is_refused():
+    """The extract's claim is that it is human; an unverifiable claim fails.
+
+    Passing the rows through unfiltered would produce an extract that is
+    indistinguishable from a filtered one and is not one.
+    """
+    import pytest
+
+    with pytest.raises(ValueError) as excinfo:
+        read_archive_tsv(TSV_NO_ORGANISM_COLUMNS)
+    message = str(excinfo.value)
+    assert "ncbi_tax_id_source" in message
+    assert "ncbi_tax_id_target" in message
