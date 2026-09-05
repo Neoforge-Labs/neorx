@@ -6,9 +6,12 @@ invisibly. So a source with no snapshot at a requested date is a named
 refusal, never a fallback.
 """
 
+import polars as pl
 import pytest
 
+from neorx.snapshots.reader import SnapshotStore
 from neorx.snapshots.resolver import SourceResolver, UnpinnedSourceError
+from neorx.snapshots.schema import ASSOCIATION_COLUMNS, INTERACTION_COLUMNS
 
 
 class _FakeStore:
@@ -45,9 +48,70 @@ def test_an_unpinned_source_stays_live_even_on_a_dated_run():
     assert _resolver().resolve("string", as_of="2018-06")() == "LIVE_STRING"
 
 
-def test_a_dated_run_uses_the_snapshot_for_a_pinned_source():
-    reader = _resolver().resolve("opentargets", as_of="2018-06")
-    assert reader() != "LIVE_OT"
+def _store_with_an_extract(root):
+    """A real on-disk store, because a resolved reader really reads it."""
+    ot = root / "opentargets" / "18.06"
+    ot.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "target_id": ["ENSG0000001"],
+            "target_symbol": ["CCR5"],
+            "disease_id": ["EFO_0000764"],
+            "datatype": ["genetic_association"],
+            "score": [0.75],
+        },
+        schema=ASSOCIATION_COLUMNS,
+    ).write_parquet(ot / "associations.parquet")
+
+    op = root / "omnipath" / "20180614"
+    op.mkdir(parents=True)
+    pl.DataFrame(
+        {
+            "source_symbol": ["CCR5"],
+            "target_symbol": ["CXCR4"],
+            "is_directed": [True],
+            "consensus_direction": [True],
+            "is_stimulation": [True],
+            "is_inhibition": [False],
+            "primary_sources": ["SIGNOR"],
+            "references": ["SIGNOR:12345"],
+        },
+        schema=INTERACTION_COLUMNS,
+    ).write_parquet(op / "interactions.parquet")
+
+    return SnapshotStore(root)
+
+
+def _snapshot_resolver(root):
+    return SourceResolver(
+        store=_store_with_an_extract(root),
+        release_for=lambda source, as_of: RELEASES[as_of][source],
+        live={"opentargets": lambda *a, **k: "LIVE_OT",
+              "omnipath": lambda *a, **k: "LIVE_OMNI"},
+    )
+
+
+def test_a_dated_run_reads_the_snapshot_rather_than_the_live_client(tmp_path):
+    # The reader must be the snapshot's, and it must be a real reader:
+    # returning a description of the snapshot rather than its contents is
+    # how a dated build ended up made entirely of live data before.
+    reader = _snapshot_resolver(tmp_path).resolve("opentargets", as_of="2018-06")
+    nodes, edges = reader("HIV infection", disease_id="EFO_0000764", max_results=5)
+    assert [n.name for n in nodes] == ["CCR5"]
+    assert nodes[0].score == pytest.approx(0.75)
+    assert [(e.source_id, e.target_id) for e in edges] == [
+        ("gene:CCR5", "disease:hiv_infection")
+    ]
+
+
+def test_a_dated_omnipath_reader_returns_edges_from_the_snapshot(tmp_path):
+    reader = _snapshot_resolver(tmp_path).resolve("omnipath", as_of="2018-06")
+    nodes, edges = reader(["CCR5", "CXCR4"])
+    assert nodes == []
+    assert [(e.source_id, e.target_id) for e in edges] == [
+        ("gene:CCR5", "gene:CXCR4")
+    ]
+    assert edges[0].primary_sources == ["SIGNOR"]
 
 
 def test_a_missing_snapshot_refuses_rather_than_falling_back():
