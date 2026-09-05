@@ -19,6 +19,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from neorx.snapshots.manifest import read_manifest
+
 RUNS_DIR = Path(__file__).resolve().parents[3] / "runs"
 # ~7 MB per disease measured on a live neorx-7disease run; seven diseases
 # ~= 49 MB, so 250 MB leaves genuine headroom while still catching a
@@ -101,6 +103,7 @@ class RunRecord:
         *,
         runs_dir: Path | None = None,
         allow_large: bool = False,
+        snapshot_manifest: Path | None = None,
     ) -> RunRecord:
         started = datetime.now(UTC)
         sha = _git_sha()
@@ -121,6 +124,15 @@ class RunRecord:
         rec._started = started
         rec._experiment = experiment
         (path / "rows.jsonl").touch()
+
+        snapshots: dict[str, dict[str, Any]] = {}
+        if snapshot_manifest is not None:
+            for (source, release), entry in read_manifest(snapshot_manifest).items():
+                snapshots[f"{source}/{release}"] = {
+                    "sha256": entry.sha256,
+                    "extractor_version": entry.extractor_version,
+                }
+
         (path / "env.json").write_text(
             json.dumps(
                 {
@@ -130,6 +142,7 @@ class RunRecord:
                     "platform": platform.platform(),
                     "started_utc": started.isoformat(),
                     "deps": _dep_versions(),
+                    "snapshots": snapshots,
                 },
                 indent=2,
             )
