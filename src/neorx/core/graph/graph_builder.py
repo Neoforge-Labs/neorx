@@ -130,6 +130,7 @@ def build_disease_graph(
         cache_key = _cache_key(
             "graph", disease=disease.lower(),
             max_genes=max_genes, string_min_score=string_min_score,
+            as_of=as_of,
         )
         cached = cache.get(cache_key)
         if cached is not None:
