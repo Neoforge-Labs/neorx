@@ -133,11 +133,27 @@ SNAPSHOT_RELEASE_KEY = "snapshot_release"
 # with the answer -- so unlike ordinary enrichment these are refused
 # outright rather than merely prevented from overwriting.
 #
-# Today only `evaluate_pathogen_target` reads `clinical_phase`, and dated
-# builds no longer reach it because pathogen nodes are excluded by type.
-# That makes this inert -- but inert by the coincidence of a different
-# rule, which is not a property to rely on. Six defects in this codebase
-# were inert until something downstream started reading them.
+# Most of these are inert today: only `evaluate_pathogen_target` reads
+# `clinical_phase`, and dated builds no longer reach it because pathogen
+# nodes are excluded by type. Inert by the coincidence of a different rule
+# is not a property to rely on -- six defects in this codebase were inert
+# until something downstream started reading them.
+#
+# `is_druggable` is the exception: it is NOT inert, and it is the reason
+# this set exists rather than a docstring. `chembl.py:344` sets it True
+# unconditionally for every target it returns, and ChEMBL only returns
+# targets that have drugs -- so on a pinned node it means "a drug exists
+# for this target today". `scoring.assess_druggability` adds 0.15 for it
+# and `compute_causal_confidence` weights druggability at 0.10, so every
+# target with a drug today scored +0.015 on a dated build. Small, and
+# systematic in the direction of the label, which is the shape that
+# inflates an apparent prediction rather than merely adding noise.
+#
+# UniProt sets the same key from keywords and PDB structures, which is
+# structural rather than clinical -- but it is still today's answer, and
+# the key is shared, so it goes too. Druggability on a dated build is
+# correspondingly weaker than on a live one. That is consistent across
+# releases, which is what the three time points actually compare.
 OUTCOME_KEYS = frozenset({
     "clinical_phase",
     "max_phase",
@@ -145,6 +161,8 @@ OUTCOME_KEYS = frozenset({
     "n_drugs",
     "drugs",
     "mechanisms_of_action",
+    "is_druggable",
+    "tractability",
 })
 
 
