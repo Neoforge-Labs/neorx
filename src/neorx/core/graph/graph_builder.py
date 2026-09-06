@@ -48,6 +48,7 @@ from neorx.core.graph.dated_frame import (
     enrich,
     frame_identity,
     is_pinned,
+    live_metadata_for_pinned,
     match_key,
     restrict_to_frame,
 )
@@ -747,12 +748,18 @@ def _merge_nodes(
 
             if existing_pinned and not incoming_pinned:
                 # Enrichment only: add what the release does not say,
-                # change nothing it does.
-                for meta_key, value in node.metadata.items():
+                # change nothing it does, and never state the clinical
+                # outcome -- that is the label, not enrichment.
+                for meta_key, value in live_metadata_for_pinned(node.metadata).items():
                     existing.metadata.setdefault(meta_key, value)
             elif incoming_pinned and not existing_pinned:
-                # The pinned node arrived second (Monarch is queried
-                # first). The release's answer replaces the live one.
+                # The pinned node arrived second (Monarch and ChEMBL are
+                # queried first, so on a dated build this is the common
+                # ordering). The release's answer replaces the live one --
+                # but update() only overwrites keys the release HAS, so
+                # the live node's outcome keys have to be dropped first
+                # or they survive on a node that is now pinned.
+                existing.metadata = live_metadata_for_pinned(existing.metadata)
                 existing.score = node.score
                 existing.metadata.update(node.metadata)
             else:

@@ -95,11 +95,13 @@ from neorx.core.graph.models import GraphEdge, GraphNode, NodeType
 __all__ = [
     "EXCLUDED_TYPES",
     "GENE_LIKE_TYPES",
+    "OUTCOME_KEYS",
     "SNAPSHOT_RELEASE_KEY",
     "Restriction",
     "enrich",
     "frame_identity",
     "is_pinned",
+    "live_metadata_for_pinned",
     "match_key",
     "restrict_to_frame",
 ]
@@ -123,6 +125,37 @@ EXCLUDED_TYPES: tuple[NodeType, ...] = (NodeType.PATHOGEN_GENE,)
 # ``open_targets_from_snapshot``; read here rather than threaded through
 # the builder as a flag, so the fact travels with the node it is about.
 SNAPSHOT_RELEASE_KEY = "snapshot_release"
+
+# Metadata that states a target's clinical progress. Sub-project 6 asks
+# whether causal structure predicts trial outcomes; these keys ARE that
+# outcome, and ChEMBL derives them from today's `max_phase`. A live source
+# may enrich a pinned node with what the release is silent about, but not
+# with the answer -- so unlike ordinary enrichment these are refused
+# outright rather than merely prevented from overwriting.
+#
+# Today only `evaluate_pathogen_target` reads `clinical_phase`, and dated
+# builds no longer reach it because pathogen nodes are excluded by type.
+# That makes this inert -- but inert by the coincidence of a different
+# rule, which is not a property to rely on. Six defects in this codebase
+# were inert until something downstream started reading them.
+OUTCOME_KEYS = frozenset({
+    "clinical_phase",
+    "max_phase",
+    "chembl_drug_evidence_score",
+    "n_drugs",
+    "drugs",
+    "mechanisms_of_action",
+})
+
+
+def live_metadata_for_pinned(metadata: dict[str, Any]) -> dict[str, Any]:
+    """A live source's metadata, minus what states the clinical outcome.
+
+    Applied wherever live metadata reaches a pinned node -- the enrichment
+    passes and both pinned branches of ``_merge_nodes`` -- so a dated
+    node cannot carry today's clinical phase by any route.
+    """
+    return {k: v for k, v in metadata.items() if k not in OUTCOME_KEYS}
 
 
 def match_key(value: str) -> str:
@@ -153,9 +186,12 @@ def enrich(node: GraphNode, key: str, value: Any) -> None:
     The same protection ``_merge_nodes`` applies, for the enrichment
     passes that write metadata directly rather than through a merge. A
     live source may add what the release is silent about; it may not
-    restate what the release said.
+    restate what the release said, and it may not state the clinical
+    outcome at all (see ``OUTCOME_KEYS``).
     """
     if is_pinned(node):
+        if key in OUTCOME_KEYS:
+            return
         node.metadata.setdefault(key, value)
     else:
         node.metadata[key] = value
