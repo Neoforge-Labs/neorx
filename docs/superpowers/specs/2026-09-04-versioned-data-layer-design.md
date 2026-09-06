@@ -97,13 +97,55 @@ verdict from `identifiable_by_adjustment` to `cyclic_component`.
 And it competes for the `max_genes` cap, displacing frame genes from the
 regulatory query entirely.
 
-The correct rule, and the one now implemented: **on a dated build the gene
-node population is the frame.** Unpinned sources may enrich nodes already in
-the frame — pathways, structures, protein metadata, associational edges among
+The first correction, made 2026-09-06, was: **on a dated build the gene node
+population is the frame.** Unpinned sources may enrich nodes already in the
+frame — pathways, structures, protein metadata, associational edges among
 frame genes — but may not introduce gene or protein nodes, and may not
-overwrite a pinned node's score or provenance. Pinning STRING is still
-unnecessary; what was necessary was never letting an unpinned source decide
-who is in the graph.
+overwrite a pinned node's score or provenance.
+
+**Corrected again, later the same day.** That rule was still too narrow,
+and the sentence permitting "enrichment" was carrying the same false premise
+one level down. Three further channels were measured:
+
+*Provenance is an input, not a label.* The builder appends a live source's
+name to a pinned node's `source` string, on the reasoning that recording
+corroboration is not overwriting a score. But that string is *split* to
+build `collect_source_scores`, so an unpinned source becomes an evidence
+stream, and `n_active_sources` is the denominator of the consensus term.
+Every target in the graph moves. The one target ChEMBL has a drug for was
+the only one left unchanged, and the others fell by up to 0.0375 — 2.5×
+the druggability leak already ruled a defect, in the same direction.
+
+*A derived flag was blocked while its raw input stayed open.* UniProt
+computes `is_druggable` partly from `len(pdb_ids) > 0`. Blocking the flag
+left `pdb_ids` (+0.20), `uniprot_id` (+0.10) and `description` keywords
+(+0.15) reaching the druggability score directly: +0.045 on
+`causal_confidence`, three times the leak whose fix prompted it.
+
+*Associational edges reach the score even though they never reach
+identification.* STRING `interacts_with` edges between two frame genes
+moved `causal_confidence` 0.5342 → 0.5819 and `robustness` 0.5404 → 0.6142.
+
+So the rule is now simply: **on a dated build, an unpinned source
+contributes nothing that reaches a number** — no nodes, no edges, no
+provenance strings, no node fields. A dated graph is the pinned release.
+
+The cost is stated rather than hidden: a dated graph carries no pathway,
+structure or interaction enrichment, so `n_pathways`, `n_interactions`,
+druggability and evidence-stream counts fall for every dated target.
+Identifiability — the quantity the prediction actually tests — is
+untouched, because it comes from OpenTargets and OmniPath alone. Pinning
+STRING, KEGG, Reactome, UniProt and PDB remains unnecessary; excluding
+them from dated builds achieves the same thing at no download cost.
+
+What this section got wrong three times running is worth naming, because
+it is the failure mode of the whole design rather than of one sentence:
+"identification filters those edges out" is a true statement about
+*identification* that was repeatedly assumed to be a statement about *the
+score*. Identification reads edge types and evidence classes. The score
+reads node counts, source strings, structure counts and pathway
+memberships — none of which identification touches, and all of which an
+unpinned source was free to supply.
 
 **The candidate frame is pinned with them.** This is the subtle half. Features
 computed from 2018 data are useless if the *population* was chosen with
@@ -305,7 +347,7 @@ hundreds of pairs — a measurement rather than an anecdote.
 | Decision | Choice | Rationale |
 |---|---|---|
 | Scope of pinning | OpenTargets + OmniPath, plus the candidate frame | Only these feed the causal subgraph; frame leakage is the subtle failure |
-| Node population on a dated build | The frame. Unpinned sources enrich, never introduce or overwrite | Corrected 2026-09-06: unpinned *nodes* set scores and draw pinned OmniPath arrows even when their edges are filtered |
+| What a dated build contains | Only the pinned release. An unpinned source contributes nothing that reaches a number: no nodes, no edges, no provenance strings, no node fields | Corrected twice on 2026-09-06. The first correction stopped unpinned *nodes*; the second stopped unpinned *provenance, fields and edges*, which reach the score without ever reaching identification |
 | Storage | Derived Parquet extracts, raw discarded | A release does not fit; the subgraph needs four columns |
 | Time points | Three: 2018-06, 2021-11, 2025-06 | One per OT format era, each with a matching OmniPath dump |
 | Snapshot vs live | `SourceResolver` on an optional `as_of` | Keeps the interactive path unchanged |
@@ -355,6 +397,25 @@ still reading current data through its node set:
     whether the unpinned sources returned anything. This is the criterion
     that fails loudest when the population rule is broken, and the one to
     write first when touching this path.
+
+Added 2026-09-06, after criteria 9 and 10 both held while three further
+channels moved `causal_confidence`:
+
+11. A dated graph is **identical** — nodes, edges, node fields, provenance
+    strings and metadata alike — whether the unpinned sources return
+    everything they can or nothing at all. Criteria 4, 6, 9 and 10 are all
+    consequences of this one; each of them passed while a leak was live,
+    because each names a mechanism and this names the property.
+12. The fixture proving 11 is not vacuous: every dimension it compares is
+    exercised by a contribution that actually survives a dated build.
+    Removing any one guard must make it fail. A test whose fixture offers
+    nothing has been mistaken for a passing test three times on this path,
+    twice in tests written specifically to prevent that.
+
+Criterion 12 is not a testing nicety. Of the seven leaks found here, three
+were invisible because the test that should have caught them stubbed the
+offending source to return nothing — establishing the condition under which
+the defect cannot occur, and then verifying it did not occur.
 
 Criteria 1-8 were originally numbered with two 6s. Renumbered here; no
 criterion was added to or removed from that range.
