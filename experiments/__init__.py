@@ -8,6 +8,7 @@ a library feature.
 from experiments import (  # noqa: F401
     causalbiorl_bench,
     corpus_census,
+    dated_build,
     figures,
     genmol_eval,
     neorx_7disease,

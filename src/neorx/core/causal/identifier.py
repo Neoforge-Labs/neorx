@@ -263,12 +263,32 @@ def _get_candidate_nodes(
         if node_id == disease_node_id:
             continue
 
+        # On a dated run, exclude by TYPE and not by hoping the symbol
+        # misses. ChEMBL namespaces a pathogen's node id
+        # (`pathogen:<organism>:<SYMBOL>`) but leaves `name` as the bare
+        # symbol, so a name comparison admits P. falciparum DHFR whenever
+        # human DHFR is in the frame -- and it then OUTRANKS the human
+        # gene, on a score that is 60% today's clinical phase. The
+        # builder's gate excludes these already; this one is reached with
+        # an assembled graph, which is where the spec puts the invariant.
+        if frame_keys is not None and ntype == "pathogen_gene":
+            excluded.append(
+                {
+                    "node_id": node_id,
+                    "symbol": data.get("name", ""),
+                    "source": data.get("source", ""),
+                    "reason": "excluded_by_type",
+                }
+            )
+            continue
+
         if frame_keys is not None and match_key(data.get("name", "")) not in frame_keys:
             excluded.append(
                 {
                     "node_id": node_id,
                     "symbol": data.get("name", ""),
                     "source": data.get("source", ""),
+                    "reason": "off_frame",
                 }
             )
             continue

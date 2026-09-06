@@ -51,8 +51,17 @@ def test_every_exclusion_is_recorded_with_its_source():
         "disease:d",
         frame=frozenset({"PIK3CA", "TP53"}),
     )
+    # `reason` distinguishes a gene the release did not associate with
+    # this disease from a pathogen node excluded by type -- which the
+    # symbol comparison alone used to admit, since ChEMBL namespaces a
+    # pathogen's node id but leaves its name the bare symbol.
     assert excluded == [
-        {"node_id": "gene:LATER", "symbol": "LATER", "source": "Monarch"},
+        {
+            "node_id": "gene:LATER",
+            "symbol": "LATER",
+            "source": "Monarch",
+            "reason": "off_frame",
+        },
     ]
 
 
@@ -97,3 +106,53 @@ def test_pathogen_genes_are_gated_like_any_other_candidate():
     )
     assert "gene:POL" not in candidates
     assert any(e["symbol"] == "POL" for e in excluded)
+
+
+# ── Pathogen nodes, excluded by type rather than by symbol ──────────
+#
+# ChEMBL namespaces a pathogen's node id (`pathogen:<organism>:<SYMBOL>`)
+# but leaves `name` as the bare symbol, and this gate compares names. So a
+# pathogen whose symbol collides with a human frame gene was admitted --
+# and P. falciparum DHFR then OUTRANKED human DHFR, on a score that is 60%
+# today's clinical phase. The builder's gate catches these first, which
+# made this one inert; the spec puts the invariant here, on the assembled
+# graph, precisely so it does not depend on that.
+
+
+def _graph_with_a_colliding_pathogen():
+    G = _graph()
+    G.add_node(
+        "pathogen:plasmodium_falciparum:PIK3CA",
+        node_type="pathogen_gene",
+        name="PIK3CA",  # the bare symbol, colliding with the frame gene
+        source="ChEMBL",
+    )
+    return G
+
+
+def test_a_pathogen_node_is_excluded_even_when_its_symbol_is_in_the_frame():
+    candidates, excluded = _get_candidate_nodes(
+        _graph_with_a_colliding_pathogen(),
+        "disease:d",
+        frame=frozenset({"PIK3CA", "TP53"}),
+    )
+    assert "pathogen:plasmodium_falciparum:PIK3CA" not in candidates
+    # The human gene of the same name is unaffected.
+    assert "gene:PIK3CA" in candidates
+    by_id = {e["node_id"]: e for e in excluded}
+    assert by_id["pathogen:plasmodium_falciparum:PIK3CA"]["reason"] == (
+        "excluded_by_type"
+    )
+    assert by_id["pathogen:plasmodium_falciparum:PIK3CA"]["source"] == "ChEMBL"
+
+
+def test_an_undated_run_still_evaluates_pathogen_targets():
+    """The exclusion is about dated provenance, not about pathogens.
+
+    Undated behaviour is unchanged: nothing pins a pathogen target, so a
+    dated build cannot score one honestly, but a live build can.
+    """
+    candidates, _ = _get_candidate_nodes(
+        _graph_with_a_colliding_pathogen(), "disease:d"
+    )
+    assert "pathogen:plasmodium_falciparum:PIK3CA" in candidates

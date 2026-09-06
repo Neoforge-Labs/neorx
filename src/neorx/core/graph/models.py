@@ -165,6 +165,26 @@ class DiseaseGraph(BaseModel):
     nodes: list[GraphNode] = Field(default_factory=list)
     edges: list[GraphEdge] = Field(default_factory=list)
     sources_queried: list[str] = Field(default_factory=list, description="Which databases were queried")
+    frame_exclusions: list[dict[str, str]] = Field(
+        default_factory=list,
+        description=(
+            "What an unpinned source offered a dated build and did not get "
+            "to contribute, each with the source that offered it. Empty on "
+            "an undated build. This rides on the graph so that whatever "
+            "runs it can write it to a run record: the spec requires the "
+            "exclusions to be recorded rather than merely counted, on the "
+            "reasoning that a silent filter is how frame leakage returns "
+            "after a refactor -- a run that suddenly excludes four hundred "
+            "genes where it used to exclude twelve has had something change "
+            "upstream, and that must be visible rather than absorbed. Each "
+            "entry carries a `reason`: `off_frame` for a gene the release "
+            "did not associate with this disease, `excluded_by_type` for a "
+            "pathogen node whose score would be today's clinical phase, and "
+            "`withheld` for material that was in the frame and still not "
+            "taken, because an unpinned node's name reaches the consensus "
+            "denominator and an unpinned edge reaches robustness."
+        ),
+    )
     as_of: Optional[str] = Field(
         None,
         description=(

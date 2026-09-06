@@ -87,6 +87,7 @@ def census_row(store: SnapshotStore, release: str) -> dict:
 
 @experiment(
     name="corpus-census",
+    reads_snapshots=True,
     help="Per-release disease counts: an upper bound on the corpus, pending Phase II data.",
 )
 def corpus_census(record: RunRecord) -> None:

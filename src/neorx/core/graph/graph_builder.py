@@ -504,6 +504,32 @@ def build_disease_graph(
                     source_db="NeoRx",
                 ))
 
+    # Everything an unpinned source offered and did not get to
+    # contribute, with the source that offered it. Carried on the graph so
+    # the caller can write it to a run record: counting these in a log
+    # line is the silent filter the spec warns about, and it is how frame
+    # leakage returns after a refactor.
+    frame_exclusions: list[dict[str, str]] = []
+    for source_name, names in sorted(dropped_by_source.items()):
+        frame_exclusions.extend(
+            {"source": source_name, "symbol": name, "reason": "off_frame"}
+            for name in sorted(set(names))
+        )
+    for source_name, ids in sorted(pathogens_by_source.items()):
+        frame_exclusions.extend(
+            {"source": source_name, "node_id": nid, "reason": "excluded_by_type"}
+            for nid in sorted(set(ids))
+        )
+    for source_name, (n_nodes, n_edges) in sorted(withheld_by_source.items()):
+        frame_exclusions.append(
+            {
+                "source": source_name,
+                "reason": "withheld",
+                "n_nodes": str(n_nodes),
+                "n_edges": str(n_edges),
+            }
+        )
+
     graph = DiseaseGraph(
         disease_name=disease,
         disease_id=disease_id,
@@ -511,6 +537,7 @@ def build_disease_graph(
         edges=merged_edges,
         sources_queried=sources_queried,
         as_of=as_of,
+        frame_exclusions=frame_exclusions,
     )
 
     logger.info(

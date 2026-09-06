@@ -32,6 +32,12 @@ class ExperimentDef:
     #: toward the replay's IDENTICAL/DIFFERS verdict. They are still
     #: reported (see ReplayResult.volatile_diffs), never silently dropped.
     volatile_fields: tuple[str, ...] = ()
+    #: Declares that this experiment reads pinned snapshots, so its run
+    #: record must cite which extracts produced its numbers. The
+    #: experiment declares the need; the runner supplies the manifest
+    #: path, for the same reason it chooses the HTTP capture mode -- only
+    #: the caller knows where the store lives.
+    reads_snapshots: bool = False
 
 
 _REGISTRY: dict[str, ExperimentDef] = {}
@@ -43,6 +49,7 @@ def experiment(
     help: str = "",
     captures_http: bool = False,
     volatile_fields: tuple[str, ...] = (),
+    reads_snapshots: bool = False,
 ) -> Callable[[ExperimentFn], ExperimentFn]:
     """Register an experiment under ``name``.
 
@@ -54,6 +61,13 @@ def experiment(
     ``volatile_fields`` declares row keys that are expected to differ on
     every replay (wall-clock timings and similar) -- see
     ``ExperimentDef.volatile_fields``.
+
+    ``reads_snapshots`` declares that the experiment's numbers come from
+    pinned extracts, so the runner records which ones. Without it, an
+    experiment reading snapshots writes an ``env.json`` whose
+    ``snapshots`` object is empty -- a run citing no inputs, which is the
+    provenance failure this project already found in four published
+    papers.
     """
 
     def decorate(fn: ExperimentFn) -> ExperimentFn:
@@ -65,6 +79,7 @@ def experiment(
             fn=fn,
             captures_http=captures_http,
             volatile_fields=tuple(volatile_fields),
+            reads_snapshots=reads_snapshots,
         )
         return fn
 
@@ -83,15 +98,33 @@ def list_experiments() -> list[ExperimentDef]:
     return [_REGISTRY[k] for k in sorted(_REGISTRY)]
 
 
+# Where `neorx snapshot build` writes by default, so a run reads the
+# manifest the CLI wrote without a second place to configure one path.
+SNAPSHOT_MANIFEST = Path("snapshots") / "manifest.toml"
+
+
 def run_experiment(
     name: str,
     *,
     allow_large: bool = False,
     runs_dir: Path | None = None,
+    snapshot_manifest: Path | None = SNAPSHOT_MANIFEST,
 ) -> RunRecord:
-    """Execute an experiment, writing its record whatever the outcome."""
+    """Execute an experiment, writing its record whatever the outcome.
+
+    An experiment that declares ``reads_snapshots`` gets its extracts
+    cited in ``env.json``. One that does not gets an empty ``snapshots``
+    object, which is accurate: it read none.
+    """
     defn = get_experiment(name)
-    record = RunRecord.create(name, runs_dir=runs_dir, allow_large=allow_large)
+    record = RunRecord.create(
+        name,
+        runs_dir=runs_dir,
+        allow_large=allow_large,
+        snapshot_manifest=(
+            snapshot_manifest if defn.reads_snapshots else None
+        ),
+    )
     try:
         if defn.captures_http:
             with capture(record, mode="record"):
