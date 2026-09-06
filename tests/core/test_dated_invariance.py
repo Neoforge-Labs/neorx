@@ -76,9 +76,15 @@ def _write_snapshot(root):
 def _everything_a_live_source_could_say():
     """A deliberately hostile unpinned contribution.
 
-    One node re-spelling a frame gene at a higher score with today's
-    clinical answers on it; one node off the frame entirely; an edge
-    between them. Each of these is a defect that shipped.
+    Every element here survived a dated build at some point, and the two
+    edges are the correction that matters: the first version of this
+    fixture had one edge pointing at an off-frame node, so the edge was
+    dropped along with its target and the `edges` comparison compared two
+    empty lists. It passed for the same reason three of the leaks it was
+    written to catch had passed -- the fixture offered nothing that could
+    survive. `_the_hostile_contribution_is_not_vacuous` now checks each
+    dimension can actually move, rather than only that an undated build
+    accepts the fixture.
     """
     return (
         [
@@ -95,6 +101,9 @@ def _everything_a_live_source_could_say():
                     "has_known_drug": True,
                     "is_druggable": True,
                     "chembl_drug_evidence_score": 0.9,
+                    # Removing this key from OUTCOME_KEYS survived the
+                    # whole suite until the fixture set it.
+                    "tractability": [{"value": True, "modality": "SM"}],
                 },
             ),
             GraphNode(
@@ -114,6 +123,7 @@ def _everything_a_live_source_could_say():
             ),
         ],
         [
+            # Off-frame target: dropped with its endpoint.
             GraphEdge(
                 source_id="gene:C9ORF72",
                 target_id="gene:OFFFRAME",
@@ -121,9 +131,61 @@ def _everything_a_live_source_could_say():
                 weight=0.9,
                 source_db="ChEMBL",
                 evidence="live",
-            )
+            ),
+            # BOTH endpoints in the frame, spelled as the release spells
+            # them. This one survived frame restriction, and moved CCR5's
+            # causal_confidence 0.5342 -> 0.5819 and robustness
+            # 0.5404 -> 0.6142 through corroboration_factor -- without
+            # ever reaching identification, which is why four passes over
+            # the identification path did not see it.
+            GraphEdge(
+                source_id="gene:CCR5",
+                target_id="gene:CXCR4",
+                edge_type=EdgeType.INTERACTS_WITH,
+                weight=0.95,
+                source_db="STRING",
+                evidence="live interaction",
+                primary_sources=["STRING", "BioGRID"],
+            ),
         ],
     )
+
+
+def _what_uniprot_really_returns():
+    """Faithful to ``uniprot.py``'s documented contract, not ``{}``.
+
+    The invariance test stubbed UniProt and PDB empty, so it was blind
+    exactly where the largest remaining leak was: pdb_ids +0.20 of
+    assess_druggability, uniprot_id +0.10, a `function` description +0.15
+    through its keyword match, and go_terms an evidence stream. Together
+    +0.045 on causal_confidence -- three times the leak whose fix prompted
+    the test.
+    """
+    return {
+        "CCR5": {
+            "uniprot_id": "P51681",
+            "function": "C-C chemokine receptor type 5, a GPCR",
+            "pdb_ids": ["5UIW", "4MBS"],
+            "is_druggable": True,
+            "subcellular_location": "Cell membrane",
+            "go_terms": ["GO:0004950"],
+        },
+        "C9orf72": {
+            "uniprot_id": "Q96LT7",
+            "function": "Guanine nucleotide exchange factor",
+            "pdb_ids": ["6LT0"],
+            "is_druggable": True,
+            "subcellular_location": "Cytoplasm",
+            "go_terms": ["GO:0005085"],
+        },
+    }
+
+
+def _what_pdb_really_returns():
+    return {
+        "CCR5": [{"pdb_id": "5UIW", "has_ligand": True, "resolution": 2.1}],
+        "C9orf72": [{"pdb_id": "6LT0", "has_ligand": False, "resolution": 3.2}],
+    }
 
 
 def _build(tmp_path, monkeypatch, *, live_active, tag):
@@ -141,8 +203,12 @@ def _build(tmp_path, monkeypatch, *, live_active, tag):
     contribution = _everything_a_live_source_could_say() if live_active else ([], [])
     for name in UNPINNED:
         monkeypatch.setattr(gb, name, lambda *_a, **_kw: contribution)
-    monkeypatch.setattr(gb, "query_uniprot", empty_dict)
-    monkeypatch.setattr(gb, "query_pdb_structures", empty_dict)
+    # Faithful returns, not {}. Stubbing these empty is what made the
+    # first version of this test blind to the largest remaining leak.
+    uniprot = _what_uniprot_really_returns() if live_active else {}
+    pdb = _what_pdb_really_returns() if live_active else {}
+    monkeypatch.setattr(gb, "query_uniprot", lambda *_a, **_kw: uniprot)
+    monkeypatch.setattr(gb, "query_pdb_structures", lambda *_a, **_kw: pdb)
     monkeypatch.setattr(gb, "get_cache", lambda: FileCache(cache_dir=root / "cache"))
 
     resolver = SourceResolver(
@@ -156,9 +222,24 @@ def _build(tmp_path, monkeypatch, *, live_active, tag):
 
 
 def _fingerprint(graph):
+    """Everything about the graph that can reach a reported number.
+
+    The omissions in the first version were not incidental: `source` is
+    split by evidence.py into evidence streams and the consensus
+    denominator, `pdb_ids`/`uniprot_id`/`description` are worth 0.45 of
+    assess_druggability between them, and an edge's `primary_sources`
+    feeds corroboration_factor. None of them is a score, and all of them
+    move one.
+    """
     return {
         "nodes": sorted(
-            (n.node_id, n.name, n.node_type.value, round(n.score, 9)) for n in graph.nodes
+            (n.node_id, n.name, n.node_type.value, round(n.score, 9))
+            for n in graph.nodes
+        ),
+        "node_provenance": sorted(
+            (n.node_id, n.source, n.uniprot_id or "", tuple(n.pdb_ids),
+             n.description or "")
+            for n in graph.nodes
         ),
         "edges": sorted(
             (
@@ -170,6 +251,11 @@ def _fingerprint(graph):
             )
             for e in graph.edges
         ),
+        "edge_provenance": sorted(
+            (e.source_id, e.target_id, e.source_db or "",
+             tuple(e.primary_sources or ()), str(getattr(e, "sign", "")))
+            for e in graph.edges
+        ),
         # Values too, not just keys: a key present in both with a live
         # value in one of them is the druggability defect exactly.
         "metadata": sorted(
@@ -178,7 +264,10 @@ def _fingerprint(graph):
     }
 
 
-@pytest.mark.parametrize("part", ["nodes", "edges", "metadata"])
+@pytest.mark.parametrize(
+    "part",
+    ["nodes", "node_provenance", "edges", "edge_provenance", "metadata"],
+)
 def test_a_dated_graph_is_identical_whatever_the_live_sources_say(
     tmp_path, monkeypatch, part
 ):
@@ -188,35 +277,71 @@ def test_a_dated_graph_is_identical_whatever_the_live_sources_say(
 
 
 def test_the_hostile_contribution_is_not_vacuous(tmp_path, monkeypatch):
-    """The invariance above must not hold because nothing was offered.
+    """Every dimension above must be one the fixture can actually move.
 
-    Without this, stubbing the live sources to return nothing would make
-    every assertion above pass -- which is the exact shape of the blind
-    spot that let three of these defects ship.
+    This is spec criterion 12, and it exists because the first version of
+    this file did not satisfy it. That version asserted the fixture was
+    non-empty and that an UNDATED build accepted it -- neither of which
+    says anything about whether an element survives the DATED restriction,
+    which is the only thing the invariance claim rests on. Its `edges`
+    parametrisation was comparing two empty lists.
+
+    So the check is made against the undated build, where nothing is
+    withheld: if a dimension moves there, the fixture can exercise it, and
+    the dated build holding it fixed is a real result rather than an
+    absence of input.
     """
-    nodes, edges = _everything_a_live_source_could_say()
-    assert len(nodes) == 3
-    assert len(edges) == 1
-
-    # And an UNDATED build does take them, so the fixture really is
-    # something a live source can contribute.
     import neorx.core.graph.graph_builder as gb
 
-    def empty_dict(*_a, **_kw):
-        return {}
+    nodes, edges = _everything_a_live_source_could_say()
+    assert len(nodes) == 3
+    assert len(edges) == 2
 
-    for name in UNPINNED:
-        monkeypatch.setattr(gb, name, lambda *_a, **_kw: ([], []))
-    monkeypatch.setattr(gb, "query_monarch", lambda *_a, **_kw: (nodes, edges))
-    monkeypatch.setattr(gb, "query_open_targets", lambda *_a, **_kw: ([], []))
-    monkeypatch.setattr(gb, "query_omnipath", lambda *_a, **_kw: ([], []))
-    monkeypatch.setattr(gb, "query_uniprot", empty_dict)
-    monkeypatch.setattr(gb, "query_pdb_structures", empty_dict)
-    monkeypatch.setattr(
-        gb, "get_cache", lambda: FileCache(cache_dir=tmp_path / "undated-cache")
+    def _undated(live_active, tag):
+        contribution = (nodes, edges) if live_active else ([], [])
+        uniprot = _what_uniprot_really_returns() if live_active else {}
+        pdb = _what_pdb_really_returns() if live_active else {}
+        for name in UNPINNED:
+            monkeypatch.setattr(gb, name, lambda *_a, **_kw: ([], []))
+        monkeypatch.setattr(gb, "query_monarch", lambda *_a, **_kw: contribution)
+        monkeypatch.setattr(gb, "query_open_targets", lambda *_a, **_kw: _pinned_like())
+        monkeypatch.setattr(gb, "query_omnipath", lambda *_a, **_kw: ([], []))
+        monkeypatch.setattr(gb, "query_uniprot", lambda *_a, **_kw: uniprot)
+        monkeypatch.setattr(gb, "query_pdb_structures", lambda *_a, **_kw: pdb)
+        monkeypatch.setattr(
+            gb, "get_cache", lambda: FileCache(cache_dir=tmp_path / tag)
+        )
+        return _fingerprint(gb.build_disease_graph("d"))
+
+    silent = _undated(False, "u-silent")
+    loud = _undated(True, "u-loud")
+
+    moved = [part for part in silent if silent[part] != loud[part]]
+    # Not "some dimension moved": every one of them, or the fixture is
+    # vacuous for the ones that did not.
+    assert set(moved) == set(silent), (
+        f"fixture cannot exercise {sorted(set(silent) - set(moved))}; "
+        f"the invariance assertions for those dimensions prove nothing"
     )
 
-    graph = gb.build_disease_graph("d")
-    live_names = {n.name for n in graph.nodes}
-    assert "OFFFRAME" in live_names
-    assert "C9ORF72" in live_names
+
+def _pinned_like():
+    """An unpinned stand-in for the release's genes, for the undated probe.
+
+    The undated path has no snapshot, so the frame genes have to arrive
+    from somewhere for the live edges to have endpoints.
+    """
+    return (
+        [
+            GraphNode(
+                node_id=f"gene:{sym}",
+                name=sym,
+                node_type=NodeType.GENE,
+                source="Open Targets",
+                score=score,
+                metadata={"datatype_scores": {"genetic_association": score}},
+            )
+            for sym, score in (("CCR5", 0.75), ("C9orf72", 0.30), ("CXCR4", 0.40))
+        ],
+        [],
+    )

@@ -934,9 +934,14 @@ def test_an_off_frame_pathway_source_gene_does_not_become_a_node(
     names = {n.name for n in graph.nodes}
     assert KEGG_ONLY_GENE not in names
     assert REACTOME_ONLY_GENE not in names
-    # The pathways themselves are enrichment and stay: the rule restricts
-    # the candidate population, it does not switch the sources off.
-    assert any(n.node_type == NodeType.PATHWAY for n in graph.nodes)
+    # The pathways go too, as of ruling W8. They were previously kept as
+    # enrichment, on the reasoning that the rule restricts the candidate
+    # population rather than switching the sources off. But `n_pathways`
+    # is a term in compute_causal_confidence and pathway membership is
+    # today's answer, so "enrichment" was doing the same work the node
+    # population rule was written to stop. A dated graph is the pinned
+    # release; the cost is that a dated target has no pathway context.
+    assert not any(n.node_type == NodeType.PATHWAY for n in graph.nodes)
 
 
 def test_a_mixed_case_frame_gene_is_one_node_at_the_pinned_score(
@@ -962,10 +967,16 @@ def test_a_mixed_case_frame_gene_is_one_node_at_the_pinned_score(
     assert node.name == MIXED_CASE_GENE
     assert node.score == pytest.approx(0.30)
     assert node.metadata["snapshot_release"] == RELEASE
-    # And ChEMBL's contribution arrived as enrichment on that one node,
-    # rather than being dropped: a comparison that refuses the match is
-    # not a fix, it is symptom 3.
-    assert node.metadata["chembl_target_id"] == "CHEMBL2107"
+    # ChEMBL's contribution is now withheld entirely rather than landing
+    # as enrichment. The original form of this assertion required
+    # `chembl_target_id` to be present, to prove the identity match had
+    # succeeded rather than the node having been dropped for the wrong
+    # reason. That distinction still matters, so it is made on the
+    # withheld record instead of on the node -- the source matched and was
+    # refused, which is not the same as never matching.
+    assert "chembl_target_id" not in node.metadata
+    assert node.source == "Open Targets"
+    assert "ChEMBL" not in node.source
 
 
 def test_a_mixed_case_frame_gene_keeps_its_pinned_arrows(tmp_path, monkeypatch):
@@ -1168,10 +1179,18 @@ def test_uniprot_enrichment_cannot_overwrite_what_a_release_said():
 
     _enrich_nodes_with_uniprot([pinned, live], {"ccr5": info, "CXCR4": info})
 
-    # Keyed through the same normalisation as everything else, so the
-    # lower-cased key still found the node.
-    assert pinned.metadata["subcellular_location"] == "membrane"
-    # ... but the release's own answer stands.
+    # A pinned node takes nothing. Previously this asserted that
+    # subcellular_location DID land, on the reasoning that adding a key
+    # the release is silent about is harmless. It is not: pdb_ids is worth
+    # +0.20 of assess_druggability, uniprot_id +0.10 and a `function`
+    # description +0.15, and UniProt derives is_druggable partly FROM
+    # pdb_ids -- so blocking the flag while admitting its inputs blocked
+    # the smaller half of the leak.
+    assert "subcellular_location" not in pinned.metadata
+    assert "go_terms" not in pinned.metadata
+    # The release's own answer stands, as it always did.
     assert pinned.metadata["is_druggable"] is False
-    # An unpinned node is enriched exactly as before.
+    # An unpinned node is enriched exactly as before -- the rule is about
+    # dated provenance, not about switching UniProt off.
     assert live.metadata["is_druggable"] is True
+    assert live.metadata["subcellular_location"] == "membrane"

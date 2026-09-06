@@ -34,6 +34,11 @@ def _live(**metadata):
                      source="ChEMBL", score=0.8, metadata=dict(metadata))
 
 
+def _live_named(source, **metadata):
+    return GraphNode(node_id="gene:CCR5", name="CCR5", node_type=NodeType.GENE,
+                     source=source, score=0.7, metadata=dict(metadata))
+
+
 @pytest.mark.parametrize("key", sorted(OUTCOME_KEYS))
 def test_no_outcome_key_can_be_enriched_onto_a_pinned_node(key):
     node = _pinned()
@@ -116,3 +121,56 @@ def test_two_unpinned_nodes_merge_exactly_as_before():
     merged = _merge(_live(clinical_phase=4), _live())
     assert merged.score == 0.8
     assert merged.metadata["clinical_phase"] == 4
+
+
+# ── Guards that are unreachable through a build, and still must hold ──
+#
+# `admit` now withholds every unpinned contribution on a dated build, so
+# nothing unpinned reaches `_merge_nodes` or `enrich` by that route. That
+# makes the guards below defence in depth -- and it makes them exactly the
+# kind of guard this session has repeatedly found untested, because a
+# build-level test cannot reach them. Removing either one leaves the whole
+# invariance suite green. They are tested directly instead.
+
+
+def test_a_live_source_does_not_extend_a_pinned_nodes_source_string():
+    """Provenance is an input, not a label.
+
+    evidence.py SPLITS `source` into collect_source_scores, so a name in
+    it becomes an evidence stream and a unit of n_active_sources -- the
+    denominator of the consensus term. Measured before this guard: the one
+    target ChEMBL had a drug for was the only one whose confidence did not
+    move, and the others fell by up to 0.0375.
+    """
+    merged = _merge(_pinned(), _live())
+    assert merged.source == "Open Targets"
+
+
+def test_two_unpinned_nodes_still_record_both_sources():
+    # The guard is about pinned provenance, not about abolishing the
+    # corroboration record. An undated build is unchanged.
+    merged = _merge(_live(), _live_named("Monarch"))
+    assert "ChEMBL" in merged.source and "Monarch" in merged.source
+
+
+def test_tractability_is_refused_on_a_pinned_node():
+    """Named explicitly, because the parametrised test cannot catch this.
+
+    `test_no_outcome_key_can_be_enriched_onto_a_pinned_node` parametrises
+    over OUTCOME_KEYS itself, so deleting a key from that set deletes its
+    test case along with it and the suite stays green. scoring.py reads
+    `tractability` for +0.15 of assess_druggability.
+    """
+    assert "tractability" in OUTCOME_KEYS
+    node = _pinned()
+    enrich(node, "tractability", [{"value": True}])
+    assert "tractability" not in node.metadata
+
+
+def test_is_druggable_is_refused_on_a_pinned_node():
+    # Same reasoning as tractability: named so that removing it from the
+    # set is a failure rather than a silently smaller parametrisation.
+    assert "is_druggable" in OUTCOME_KEYS
+    node = _pinned()
+    enrich(node, "is_druggable", True)
+    assert "is_druggable" not in node.metadata

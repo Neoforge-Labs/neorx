@@ -232,16 +232,35 @@ def build_disease_graph(
     frame: dict[str, str] | None = None
     dropped_by_source: dict[str, list[str]] = {}
     pathogens_by_source: dict[str, list[str]] = {}
+    # In-frame material an unpinned source offered on a dated build and
+    # did not get to contribute. Distinct from dropped_by_source, which is
+    # material that was never eligible.
+    withheld_by_source: dict[str, tuple[int, int]] = {}
 
     def admit(
         source_name: str,
         nodes: list[GraphNode],
         edges: list[GraphEdge],
     ) -> tuple[list[GraphNode], list[GraphEdge]]:
-        """Take an unpinned source's contribution into the build."""
+        """Take an unpinned source's contribution into the build.
+
+        On a dated build it takes nothing. Restricting to the frame was
+        not enough: an in-frame node still merged its name into the pinned
+        node's ``source`` string, which ``evidence.collect_source_scores``
+        splits into evidence streams and whose count is the denominator of
+        the consensus term -- so an unpinned source moved every target's
+        confidence without ever changing a score directly. Associational
+        edges between two frame genes did the same through ``robustness``
+        and ``corroboration_factor``. Neither reaches identification,
+        which is why four review passes over the identification path did
+        not see them.
+
+        The restriction still runs, because what it separates out is worth
+        recording: off-frame nodes and pathogen nodes are a different
+        report from in-frame material that was withheld anyway.
+        """
         if frame is not None:
             kept = restrict_to_frame(nodes, edges, frame)
-            nodes, edges = kept.nodes, kept.edges
             if kept.off_frame:
                 dropped_by_source.setdefault(source_name, []).extend(
                     kept.off_frame
@@ -250,6 +269,11 @@ def build_disease_graph(
                 pathogens_by_source.setdefault(source_name, []).extend(
                     kept.excluded_by_type
                 )
+            if kept.nodes or kept.edges:
+                withheld_by_source[source_name] = (
+                    len(kept.nodes), len(kept.edges)
+                )
+            return [], []
         all_nodes.extend(nodes)
         all_edges.extend(edges)
         return nodes, edges
@@ -406,6 +430,23 @@ def build_disease_graph(
             ", ".join(
                 f"{source}: {len(ids)} ({', '.join(sorted(set(ids)))})"
                 for source, ids in sorted(pathogens_by_source.items())
+            ),
+        )
+    if frame is not None and withheld_by_source:
+        logger.info(
+            "Dated build of '%s' as of %s: withheld in-frame material from "
+            "unpinned sources (%s). These were eligible by frame and still "
+            "not taken: an unpinned node merges its name into the pinned "
+            "node's source string, which becomes an evidence stream and the "
+            "consensus denominator, and an unpinned edge between two frame "
+            "genes moves robustness. Neither reaches identification, which "
+            "is why both survived four reviews of that path.",
+            disease, as_of,
+            ", ".join(
+                f"{source}: {n_nodes} node(s), {n_edges} edge(s)"
+                for source, (n_nodes, n_edges) in sorted(
+                    withheld_by_source.items()
+                )
             ),
         )
 
@@ -665,6 +706,13 @@ def _enrich_nodes_with_uniprot(
     """
     by_key = {match_key(gene): info for gene, info in uniprot_data.items()}
     for node in nodes:
+        # A pinned node takes nothing from a live source. `pdb_ids` is
+        # worth +0.20 in assess_druggability, `uniprot_id` +0.10 and a
+        # `function` description +0.15 through its keyword match -- and
+        # UniProt derives `is_druggable` partly FROM pdb_ids, so blocking
+        # the flag while leaving these open blocked the smaller half.
+        if is_pinned(node):
+            continue
         info = by_key.get(match_key(node.name))
         if not info:
             continue
@@ -693,6 +741,11 @@ def _enrich_nodes_with_pdb(
     """
     by_key = {match_key(gene): structs for gene, structs in pdb_data.items()}
     for node in nodes:
+        # As in the UniProt pass: today's structures are worth +0.20 of a
+        # pinned target's druggability, and PDB coverage tracks how much
+        # attention a target has had, which tracks the label.
+        if is_pinned(node):
+            continue
         structs = by_key.get(match_key(node.name))
         if not structs:
             continue
@@ -778,7 +831,20 @@ def _merge_nodes(
                 if pid not in existing_pdb:
                     existing.pdb_ids.append(pid)
             # Record multiple sources
-            if node.source and node.source not in existing.source:
+            # Provenance is an input, not a label. evidence.py SPLITS this
+            # string: an unpinned name in it becomes an entry in
+            # collect_source_scores, an evidence stream, and a unit of
+            # n_active_sources -- which is the DENOMINATOR of the consensus
+            # term, so it moves every target in the graph, not just this
+            # node. Measured: the one target ChEMBL had a drug for was the
+            # only one left unmoved, and the rest fell by up to 0.0375.
+            # The earlier reasoning here -- that recording corroboration is
+            # not overwriting a score -- was true and beside the point.
+            if (
+                node.source
+                and node.source not in existing.source
+                and not (existing_pinned and not incoming_pinned)
+            ):
                 existing.source = f"{existing.source}, {node.source}"
         else:
             # Deep, so that merging into the copy cannot reach back into
