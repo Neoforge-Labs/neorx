@@ -166,11 +166,26 @@ def evaluate_all_targets(
     # ── Biological intelligence layer ─────────────────────────
     disease_type = classify_disease(graph.disease_name)
     classifier = TargetClassifier()
-    tissue_filter = TissueFilter()
+
+    # The tissue gate queries the Human Protein Atlas live, and nothing
+    # pins it. On a dated graph today's HPA answer would decide
+    # `tissue_relevant`, and a failed gate forces CORRELATIONAL whatever
+    # the confidence -- so an unpinned source would set a reported
+    # classification on a graph built from a past release. That is the
+    # rule this sub-project settled on: a dated build takes nothing from
+    # an unpinned source.
+    #
+    # Not applying it is NOT the same as passing it, and the difference is
+    # recorded on every result rather than left to be inferred from a
+    # `tissue_relevant=True` that looks like a pass. A dated run is
+    # therefore systematically more permissive here than a live one, and
+    # the two classifications must not be pooled.
+    tissue_filter = None if graph.as_of else TissueFilter()
 
     logger.info(
-        "Disease type: %s → classifier + tissue filter active.",
+        "Disease type: %s → classifier active, tissue filter %s.",
         disease_type.value,
+        "SKIPPED (dated build: HPA is unpinned)" if graph.as_of else "active",
     )
 
     # Get candidate genes/proteins
@@ -357,6 +372,19 @@ def _evaluate_target(
     if tissue_filter is not None and disease_name:
         tissue_relevant, tissue_coverage, tissue_explanation = (
             tissue_filter.is_tissue_relevant(gene_name, disease_name)
+        )
+    elif graph is not None and getattr(graph, "as_of", None):
+        # Say so on the result. `tissue_relevant=True` with an empty
+        # explanation is indistinguishable from a gene that passed the
+        # gate, and a reader comparing a dated classification with a live
+        # one would have no way to know the gate never ran.
+        tissue_explanation = (
+            f"Tissue gate not applied: this graph is dated "
+            f"{graph.as_of} and the Human Protein Atlas is not pinned, "
+            f"so today's expression data cannot decide a past release's "
+            f"classification. Not applied is not the same as passed -- a "
+            f"dated classification is more permissive here than a live "
+            f"one, and the two must not be pooled."
         )
 
     # ── Step 1: Graph-Based Causal Analysis ─────────────────────

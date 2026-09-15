@@ -7,12 +7,13 @@ never decides where results go -- the runner does both. That is what makes
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from neorx.experiments.capture import capture
-from neorx.experiments.record import RunRecord
+from neorx.experiments.record import ProvenanceError, RunRecord
 
 ExperimentFn = Callable[[RunRecord], None]
 
@@ -98,6 +99,12 @@ def list_experiments() -> list[ExperimentDef]:
     return [_REGISTRY[k] for k in sorted(_REGISTRY)]
 
 
+def _cited_snapshots(record: RunRecord) -> dict:
+    """What the record's env.json actually cites."""
+    env = json.loads((record.path / "env.json").read_text(encoding="utf-8"))
+    return env.get("snapshots") or {}
+
+
 # Where `neorx snapshot build` writes by default, so a run reads the
 # manifest the CLI wrote without a second place to configure one path.
 SNAPSHOT_MANIFEST = Path("snapshots") / "manifest.toml"
@@ -125,6 +132,22 @@ def run_experiment(
             snapshot_manifest if defn.reads_snapshots else None
         ),
     )
+    if defn.reads_snapshots and not _cited_snapshots(record):
+        # The declaration buys a path, not a guarantee. A store whose
+        # extracts are present but whose manifest is missing produced a
+        # run that read those extracts, wrote "snapshots": {}, and
+        # finalised `complete` -- a number with no traceable derivation,
+        # which is the exact failure this project found in four published
+        # papers. Refuse instead: a run that cannot say what produced it
+        # is a failed run, not a quiet one.
+        record.finalise("failed")
+        raise ProvenanceError(
+            f"experiment {name!r} declares reads_snapshots, but no snapshot "
+            f"was cited: {snapshot_manifest} is missing or has no entries. "
+            f"Build the extracts with `neorx snapshot build`, which writes "
+            f"the manifest beside them. Running without it would report "
+            f"numbers derived from extracts the record cannot name."
+        )
     try:
         if defn.captures_http:
             with capture(record, mode="record"):

@@ -35,6 +35,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import polars as pl
+
 from neorx.core.graph.graph_builder import build_disease_graph
 from neorx.experiments.record import RunRecord
 from neorx.experiments.registry import experiment
@@ -44,6 +46,15 @@ from neorx.snapshots.resolver import SourceResolver
 
 # Matches the default `--root` of `neorx snapshot build`.
 STORE_ROOT = Path("snapshots")
+
+
+class UnknownDiseaseForRelease(KeyError):
+    """A disease id the pinned release does not carry.
+
+    Raised rather than recorded as zeros: an empty result reads as a
+    finding about the disease, and this is a fact about the id.
+    """
+
 
 # Diseases to build, as (name, EFO id). A dated build requires the id:
 # the extract is keyed on it and carries no disease names, and resolving a
@@ -84,6 +95,24 @@ def build_row(
     Pure enough to unit-test: everything it needs arrives as an argument,
     and it returns a row rather than writing one.
     """
+    # A disease id the release does not carry yields an empty frame, and
+    # an empty frame is indistinguishable in a results table from "this
+    # release recorded no genetic evidence for this disease" -- one is a
+    # configuration mistake and the other is a finding. OpenTargets keyed
+    # diseases differently across eras (EFO in 18.06, MONDO from the 21.x
+    # era), so pairing one id with every time point silently produces
+    # zeros for the eras that do not use it.
+    associations = store.associations(release_for("opentargets", as_of))
+    if associations.filter(pl.col("disease_id") == disease_id).height == 0:
+        raise UnknownDiseaseForRelease(
+            f"{disease_id!r} appears nowhere in the OpenTargets "
+            f"{release_for('opentargets', as_of)} extract, so a build at "
+            f"{as_of} would record zeros indistinguishable from an absence "
+            f"of evidence. Check the id this release uses for "
+            f"{disease!r} -- OpenTargets keys diseases by EFO in the 18.06 "
+            f"era and by MONDO from 21.x."
+        )
+
     started = time.perf_counter()
     graph = build_disease_graph(
         disease,
@@ -141,9 +170,13 @@ def dated_build(record: RunRecord) -> None:
     """Build every disease at every pinned time point.
 
     One row per (disease, time point), appended as each completes, so a
-    release whose extract has not been built yet costs that row rather
-    than the run -- the same reason sub-project 2 writes rows
-    incrementally.
+    run that fails partway keeps the rows it already wrote.
+
+    It does NOT survive a missing extract: the resolver raises
+    ``UnpinnedSourceError`` and the run finalises `failed` with the rows
+    so far. That is deliberate -- catching it here to keep going would be
+    swallowing the one error that says a dated build could not be pinned.
+    Build the extracts first.
     """
     store = SnapshotStore(STORE_ROOT)
     for as_of in sorted(TIME_POINTS):

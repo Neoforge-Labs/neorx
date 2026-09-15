@@ -452,25 +452,43 @@ def build_disease_graph(
 
     # ── Step 4: UniProt Enrichment ──────────────────────────────
 
-    logger.info("Enriching with UniProt metadata…")
-    uniprot_data = query_uniprot(gene_symbols, allow_mocks=allow_mocks)
-    _enrich_nodes_with_uniprot(all_nodes, uniprot_data)
-    sources_queried.append("UniProt")
-    logger.info("  UniProt: enriched %d/%d proteins.", len(uniprot_data), len(gene_symbols))
+    # On a dated build every gene node is pinned, and a pinned node takes
+    # no enrichment -- so these two calls fetch data that is then
+    # discarded. Skipping them is not only cheaper: leaving them in made a
+    # DATED build depend on two live services being reachable, which is
+    # the opposite of what pinning is for. A 2018 graph must not stop
+    # reproducing because the PDB is down in 2029.
+    #
+    # It also closes a real difference: `sources_queried.append("PDB")`
+    # below sat inside `if uniprot_map:`, so a dated graph's source list
+    # depended on what live UniProt answered -- the graph field was not
+    # invariant even though every score was.
+    if as_of is None:
+        logger.info("Enriching with UniProt metadata…")
+        uniprot_data = query_uniprot(gene_symbols, allow_mocks=allow_mocks)
+        _enrich_nodes_with_uniprot(all_nodes, uniprot_data)
+        sources_queried.append("UniProt")
+        logger.info("  UniProt: enriched %d/%d proteins.",
+                    len(uniprot_data), len(gene_symbols))
 
-    # ── Step 5: PDB Structures ──────────────────────────────────
+        # ── Step 5: PDB Structures ──────────────────────────────
 
-    uniprot_map = {
-        gene: info["uniprot_id"]
-        for gene, info in uniprot_data.items()
-        if info.get("uniprot_id")
-    }
-    if uniprot_map:
-        logger.info("Querying PDB structures for %d proteins…", len(uniprot_map))
-        pdb_data = query_pdb_structures(uniprot_map, allow_mocks=allow_mocks)
-        _enrich_nodes_with_pdb(all_nodes, pdb_data)
-        sources_queried.append("PDB")
-        logger.info("  PDB: structures for %d proteins.", len(pdb_data))
+        uniprot_map = {
+            gene: info["uniprot_id"]
+            for gene, info in uniprot_data.items()
+            if info.get("uniprot_id")
+        }
+        if uniprot_map:
+            logger.info("Querying PDB structures for %d proteins…", len(uniprot_map))
+            pdb_data = query_pdb_structures(uniprot_map, allow_mocks=allow_mocks)
+            _enrich_nodes_with_pdb(all_nodes, pdb_data)
+            sources_queried.append("PDB")
+            logger.info("  PDB: structures for %d proteins.", len(pdb_data))
+    else:
+        logger.info(
+            "UniProt and PDB skipped: every node is pinned and takes no "
+            "enrichment, so a dated build must not depend on them."
+        )
 
     # ── Step 6: Merge & Build ───────────────────────────────────
 
@@ -529,6 +547,14 @@ def build_disease_graph(
                 "n_edges": str(n_edges),
             }
         )
+
+    if as_of is not None:
+        # What CONTRIBUTED, not what was dialled. An unpinned source
+        # contributes nothing to a dated build, so listing it here would
+        # have a dated graph claim eight databases built it when two did
+        # -- and the list is persisted and rendered as "Sources".
+        contributed = {"OpenTargets", "OmniPath"}
+        sources_queried = [s for s in sources_queried if s in contributed]
 
     graph = DiseaseGraph(
         disease_name=disease,

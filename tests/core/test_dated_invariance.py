@@ -261,12 +261,34 @@ def _fingerprint(graph):
         "metadata": sorted(
             (n.node_id, k, repr(v)) for n in graph.nodes for k, v in n.metadata.items()
         ),
+        # A hand-listed set of fields cannot fail for a field nobody has
+        # thought of yet -- this module's own docstring says so, and then
+        # this happened anyway: `sources_queried` appended "PDB" only
+        # `if uniprot_map:`, so a dated graph's source list depended on
+        # what live UniProt answered. Every score was invariant and a
+        # persisted, user-visible field was not.
+        #
+        # So the whole model is compared, minus the two fields that are
+        # DESIGNED to differ: build_timestamp, and frame_exclusions, which
+        # is the record OF the difference.
+        "everything_else": {
+            k: v
+            for k, v in graph.model_dump(mode="json").items()
+            if k not in ("build_timestamp", "frame_exclusions", "nodes", "edges")
+        },
     }
 
 
 @pytest.mark.parametrize(
     "part",
-    ["nodes", "node_provenance", "edges", "edge_provenance", "metadata"],
+    [
+        "nodes",
+        "node_provenance",
+        "edges",
+        "edge_provenance",
+        "metadata",
+        "everything_else",
+    ],
 )
 def test_a_dated_graph_is_identical_whatever_the_live_sources_say(
     tmp_path, monkeypatch, part

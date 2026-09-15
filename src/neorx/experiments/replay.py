@@ -16,7 +16,7 @@ from typing import Any
 
 from neorx.experiments.capture import capture, cassette_path
 from neorx.experiments.record import RunRecord
-from neorx.experiments.registry import get_experiment
+from neorx.experiments.registry import SNAPSHOT_MANIFEST, get_experiment
 
 
 class NotReplayableError(RuntimeError):
@@ -63,7 +63,14 @@ def replay_experiment(run_id: str, *, runs_dir: Path | None = None) -> ReplayRes
         )
 
     defn = get_experiment(_experiment_name(original))
-    replay_rec = RunRecord.create(f"{defn.name}-replay", runs_dir=runs_dir)
+    # A replay reads the same extracts the original did, so its record
+    # must cite them too. Without this a replay reported identical == True
+    # over rows derived from extracts its own env.json named as {}.
+    replay_rec = RunRecord.create(
+        f"{defn.name}-replay",
+        runs_dir=runs_dir,
+        snapshot_manifest=(SNAPSHOT_MANIFEST if defn.reads_snapshots else None),
+    )
 
     has_cassette = cassette_path(original).exists()
     if defn.captures_http and has_cassette:

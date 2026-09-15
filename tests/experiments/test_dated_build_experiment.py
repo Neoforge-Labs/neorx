@@ -196,3 +196,131 @@ def test_the_experiment_declares_that_it_reads_snapshots(tmp_path):
 
     assert get_experiment("dated-build").reads_snapshots is True
     assert get_experiment("corpus-census").reads_snapshots is True
+
+
+# ── The links that had no test ──────────────────────────────────────
+#
+# Each of these was a mutation that survived the whole suite: correct
+# code with nothing asserting the connection that makes it matter. That
+# is the recurring pattern on this branch, so they are pinned directly.
+
+
+def test_running_a_reads_snapshots_experiment_actually_cites_extracts(
+    tmp_path, monkeypatch
+):
+    """The wiring, not the flag.
+
+    Replacing the runner's `snapshot_manifest=... if defn.reads_snapshots`
+    with `None` left every test green: one test asserted the flag was
+    True, another asserted RunRecord.create works when handed a manifest,
+    and nothing asserted that running the experiment connects them.
+    """
+    import json
+
+    import experiments.dated_build as db
+    from neorx.experiments.registry import run_experiment
+    from neorx.snapshots.manifest import SnapshotEntry, write_entry
+
+    store = _store(tmp_path)
+    manifest = store.root / "manifest.toml"
+    write_entry(
+        manifest,
+        SnapshotEntry(
+            source="opentargets",
+            release="18.06",
+            url="https://example.invalid/18.06",
+            sha256="a" * 64,
+            extractor_version=2,
+            rows=2,
+        ),
+    )
+    _stub_live(monkeypatch)
+    monkeypatch.setattr(db, "STORE_ROOT", store.root)
+    monkeypatch.setattr(db, "DISEASES", (("HIV infection", DISEASE_ID),))
+    monkeypatch.setattr(
+        db, "TIME_POINTS", {"2018-06": db.TIME_POINTS["2018-06"]}
+    )
+
+    record = run_experiment(
+        "dated-build", runs_dir=tmp_path / "runs", snapshot_manifest=manifest
+    )
+    env = json.loads((record.path / "env.json").read_text())
+    assert env["snapshots"]["opentargets/18.06"]["sha256"] == "a" * 64
+
+
+def test_a_run_that_cites_nothing_is_refused_rather_than_completed(
+    tmp_path, monkeypatch
+):
+    """Extracts present, manifest absent: the defect the flag was meant to fix.
+
+    Before this, such a run read the extracts, wrote "snapshots": {}, and
+    finalised `complete` -- a number with no traceable derivation, which
+    is what this project found in four published papers.
+    """
+    import experiments.dated_build as db
+    from neorx.experiments.record import ProvenanceError
+    from neorx.experiments.registry import run_experiment
+
+    store = _store(tmp_path)  # extracts exist, no manifest written
+    _stub_live(monkeypatch)
+    monkeypatch.setattr(db, "STORE_ROOT", store.root)
+
+    with pytest.raises(ProvenanceError) as excinfo:
+        run_experiment(
+            "dated-build",
+            runs_dir=tmp_path / "runs",
+            snapshot_manifest=store.root / "manifest.toml",
+        )
+    assert "reads_snapshots" in str(excinfo.value)
+
+
+def test_withheld_material_is_recorded_per_source(tmp_path, monkeypatch):
+    """The reason the new rule needs, and the one with no coverage.
+
+    `off_frame` and `excluded_by_type` were asserted; `withheld` -- what
+    an unpinned source offered that WAS in the frame and was refused
+    anyway -- was not, and deleting the loop that records it left every
+    test green. On a real build it is the largest category.
+    """
+    from experiments.dated_build import build_row
+
+    _stub_live(
+        monkeypatch,
+        nodes=[
+            GraphNode(
+                node_id="gene:CCR5",  # in the frame, spelled as the release does
+                name="CCR5",
+                node_type=NodeType.GENE,
+                source="Monarch",
+                score=0.99,
+            )
+        ],
+    )
+    row = build_row(_store(tmp_path), "HIV infection", DISEASE_ID, "2018-06")
+
+    withheld = [e for e in row["frame_exclusions"] if e["reason"] == "withheld"]
+    assert withheld, "in-frame material refused anyway must still be recorded"
+    assert withheld[0]["source"] == "Monarch"
+    assert int(withheld[0]["n_nodes"]) == 1
+
+
+def test_a_disease_id_the_release_does_not_carry_is_refused(
+    tmp_path, monkeypatch
+):
+    """Zeros read as a finding; this is a fact about the id.
+
+    OpenTargets keys diseases by EFO in the 18.06 era and by MONDO from
+    21.x, so pairing one id with every time point silently recorded
+    n_genes: 0 rows indistinguishable from "this release recorded no
+    genetic evidence".
+    """
+    from experiments.dated_build import UnknownDiseaseForRelease, build_row
+
+    _stub_live(monkeypatch)
+    with pytest.raises(UnknownDiseaseForRelease) as excinfo:
+        build_row(
+            _store(tmp_path), "Alzheimer disease", "MONDO_0004975", "2018-06"
+        )
+    message = str(excinfo.value)
+    assert "MONDO_0004975" in message
+    assert "18.06" in message
