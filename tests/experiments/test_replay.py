@@ -147,3 +147,66 @@ def test_prune_keeps_the_numbers_and_drops_only_the_inputs(tmp_path):
     assert len(reloaded.rows()) == 2, "pruning must never destroy results"
     summary = json.loads((original.path / "record.json").read_text())
     assert summary["replayable"] is False
+
+
+# ── A replay must cite its extracts, or refuse ──────────────────────
+#
+# run_experiment refuses a run that reads pinned extracts and cannot name
+# them; replay_experiment did not, so replaying a dated run produced a
+# record whose env.json said "snapshots": {} while reporting
+# identical: True over rows derived from those extracts. That is worse
+# than a run that cannot cite: it asserts agreement between two sets of
+# numbers whose inputs it cannot identify.
+
+
+def test_replaying_a_snapshot_reading_experiment_without_a_manifest_is_refused(
+    tmp_path, monkeypatch
+):
+    import neorx.experiments.replay as replay_mod
+    from neorx.experiments.record import ProvenanceError, RunRecord
+    from neorx.experiments.registry import ExperimentDef
+
+    record = RunRecord.create("citer", runs_dir=tmp_path / "runs")
+    record.append_row({"n": 1})
+    record.finalise("complete")
+
+    defn = ExperimentDef(
+        name="citer",
+        help="",
+        fn=lambda rec: rec.append_row({"n": 1}),
+        reads_snapshots=True,
+    )
+    monkeypatch.setattr(replay_mod, "get_experiment", lambda _name: defn)
+    # Point the manifest somewhere that does not exist, which is exactly
+    # the case that used to pass silently.
+    monkeypatch.setattr(
+        replay_mod, "SNAPSHOT_MANIFEST", tmp_path / "absent" / "manifest.toml"
+    )
+
+    with pytest.raises(ProvenanceError) as excinfo:
+        replay_mod.replay_experiment(record.run_id, runs_dir=tmp_path / "runs")
+    assert "reads_snapshots" in str(excinfo.value)
+
+
+def test_replaying_an_experiment_that_reads_no_snapshots_is_unaffected(
+    tmp_path, monkeypatch
+):
+    # The guard is about experiments that declare the need. Everything
+    # else replays exactly as before.
+    import neorx.experiments.replay as replay_mod
+    from neorx.experiments.record import RunRecord
+    from neorx.experiments.registry import ExperimentDef
+
+    record = RunRecord.create("plain", runs_dir=tmp_path / "runs")
+    record.append_row({"n": 1})
+    record.finalise("complete")
+
+    defn = ExperimentDef(
+        name="plain",
+        help="",
+        fn=lambda rec: rec.append_row({"n": 1}),
+        reads_snapshots=False,
+    )
+    monkeypatch.setattr(replay_mod, "get_experiment", lambda _name: defn)
+    result = replay_mod.replay_experiment(record.run_id, runs_dir=tmp_path / "runs")
+    assert result is not None

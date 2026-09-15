@@ -271,10 +271,21 @@ def _fingerprint(graph):
         # So the whole model is compared, minus the two fields that are
         # DESIGNED to differ: build_timestamp, and frame_exclusions, which
         # is the record OF the difference.
+        # Everything, minus only the two fields DESIGNED to differ:
+        # build_timestamp, and frame_exclusions, which is the record OF
+        # the difference.
+        #
+        # An earlier version of this also dropped `nodes` and `edges` on
+        # the grounds that the dimensions above cover them. They did not:
+        # GraphEdge.evidence and GraphEdge.pmids appear in no dimension,
+        # and pmids is persisted and rendered in reports. That is the
+        # hand-listed-fields failure this dimension exists to end,
+        # committed inside the fix for it. Nothing is dropped for being
+        # "already covered" again.
         "everything_else": {
             k: v
             for k, v in graph.model_dump(mode="json").items()
-            if k not in ("build_timestamp", "frame_exclusions", "nodes", "edges")
+            if k not in ("build_timestamp", "frame_exclusions")
         },
     }
 

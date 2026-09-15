@@ -16,7 +16,11 @@ from typing import Any
 
 from neorx.experiments.capture import capture, cassette_path
 from neorx.experiments.record import RunRecord
-from neorx.experiments.registry import SNAPSHOT_MANIFEST, get_experiment
+from neorx.experiments.registry import (
+    SNAPSHOT_MANIFEST,
+    get_experiment,
+    require_citation,
+)
 
 
 class NotReplayableError(RuntimeError):
@@ -71,6 +75,12 @@ def replay_experiment(run_id: str, *, runs_dir: Path | None = None) -> ReplayRes
         runs_dir=runs_dir,
         snapshot_manifest=(SNAPSHOT_MANIFEST if defn.reads_snapshots else None),
     )
+    if defn.reads_snapshots:
+        # The same refusal run_experiment makes. A replay that cannot name
+        # its extracts and still reports `identical: True` is worse than a
+        # run that cannot: it asserts agreement between two sets of
+        # numbers whose inputs it cannot identify.
+        require_citation(replay_rec, f"{defn.name}-replay", SNAPSHOT_MANIFEST)
 
     has_cassette = cassette_path(original).exists()
     if defn.captures_http and has_cassette:

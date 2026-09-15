@@ -107,7 +107,32 @@ def _cited_snapshots(record: RunRecord) -> dict:
 
 # Where `neorx snapshot build` writes by default, so a run reads the
 # manifest the CLI wrote without a second place to configure one path.
-SNAPSHOT_MANIFEST = Path("snapshots") / "manifest.toml"
+# Anchored to the repo root rather than the cwd, the same way RUNS_DIR is:
+# a relative path made a replay launched from a subdirectory cite nothing
+# while still reporting `identical: True`.
+SNAPSHOT_MANIFEST = Path(__file__).resolve().parents[3] / "snapshots" / "manifest.toml"
+
+
+def require_citation(record: RunRecord, name: str, manifest: Path | None) -> None:
+    """Refuse a run that reads pinned extracts and cannot name them.
+
+    The declaration buys a path, not a guarantee: a store whose extracts
+    are present but whose manifest is missing produced a run that read
+    those extracts, wrote ``"snapshots": {}``, and finalised complete -- a
+    number with no traceable derivation, which is the exact failure this
+    project found in four published papers. A run that cannot say what
+    produced it is a failed run, not a quiet one.
+    """
+    if _cited_snapshots(record):
+        return
+    record.finalise("failed")
+    raise ProvenanceError(
+        f"experiment {name!r} declares reads_snapshots, but no snapshot "
+        f"was cited: {manifest} is missing or has no entries. Build the "
+        f"extracts with `neorx snapshot build`, which writes the manifest "
+        f"beside them. Running without it would report numbers derived "
+        f"from extracts the record cannot name."
+    )
 
 
 def run_experiment(
@@ -132,22 +157,8 @@ def run_experiment(
             snapshot_manifest if defn.reads_snapshots else None
         ),
     )
-    if defn.reads_snapshots and not _cited_snapshots(record):
-        # The declaration buys a path, not a guarantee. A store whose
-        # extracts are present but whose manifest is missing produced a
-        # run that read those extracts, wrote "snapshots": {}, and
-        # finalised `complete` -- a number with no traceable derivation,
-        # which is the exact failure this project found in four published
-        # papers. Refuse instead: a run that cannot say what produced it
-        # is a failed run, not a quiet one.
-        record.finalise("failed")
-        raise ProvenanceError(
-            f"experiment {name!r} declares reads_snapshots, but no snapshot "
-            f"was cited: {snapshot_manifest} is missing or has no entries. "
-            f"Build the extracts with `neorx snapshot build`, which writes "
-            f"the manifest beside them. Running without it would report "
-            f"numbers derived from extracts the record cannot name."
-        )
+    if defn.reads_snapshots:
+        require_citation(record, name, snapshot_manifest)
     try:
         if defn.captures_http:
             with capture(record, mode="record"):
