@@ -436,3 +436,27 @@ def test_the_shipped_disease_table_only_offers_ids_that_name_one_disease():
     from experiments.dated_build import DISEASES
 
     assert DISEASES == (("HIV infection", ("MONDO_0005109", "EFO_0000764")),)
+
+
+def test_the_snapshot_store_is_anchored_to_the_repository_not_the_cwd():
+    """A cwd-relative store path is how a run cited bytes it did not read.
+
+    Executed by a reviewer: launched from a subdirectory holding its own
+    store, a run read that store's extracts and cited the repo-root
+    manifest's digest. Reading through the record now takes the manifest
+    from the store actually read, but the store both experiments open must
+    still be the repository's, whatever directory the command ran in.
+    """
+    from pathlib import Path
+
+    import experiments.corpus_census as cc
+    import experiments.dated_build as db
+    from neorx.experiments.record import RUNS_DIR, SNAPSHOTS_DIR
+
+    assert SNAPSHOTS_DIR.is_absolute()
+    # Same anchor as the run records themselves.
+    assert SNAPSHOTS_DIR.parent == RUNS_DIR.parent
+    repo_root = Path(db.__file__).resolve().parents[1]
+    assert repo_root / "snapshots" == SNAPSHOTS_DIR
+    assert db.STORE_ROOT == SNAPSHOTS_DIR
+    assert cc.STORE_ROOT == SNAPSHOTS_DIR
