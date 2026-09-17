@@ -21,9 +21,8 @@ rows later must not mistake this population for the final corpus.
 from __future__ import annotations
 
 import statistics
-from pathlib import Path
 
-from neorx.experiments.record import RunRecord
+from neorx.experiments.record import SNAPSHOTS_DIR, RunRecord
 from neorx.experiments.registry import experiment
 from neorx.snapshots.frame import candidate_frame, diseases_with_genetic_evidence
 from neorx.snapshots.reader import SnapshotStore
@@ -34,10 +33,10 @@ from neorx.snapshots.reader import SnapshotStore
 # whatever releases it already measured rather than losing all of them.
 RELEASES = ("18.06", "21.11", "25.06")
 
-# Matches the default `--root` of `neorx snapshot build` in
-# neorx.snapshots.__main__, so a census run reads whatever the CLI wrote
-# without a second place to configure the same path.
-STORE_ROOT = Path("snapshots")
+# The repository's snapshot store, anchored to the repo root rather than
+# the cwd. Opened through the run record, so the extracts read here are
+# the ones the record cites.
+STORE_ROOT = SNAPSHOTS_DIR
 
 
 def census_row(store: SnapshotStore, release: str) -> dict:
@@ -100,6 +99,6 @@ def corpus_census(record: RunRecord) -> None:
     on the eventual corpus: applying the Phase II filter can only shrink
     these numbers, never grow them.
     """
-    store = SnapshotStore(STORE_ROOT)
+    store = record.snapshot_store(STORE_ROOT)
     for release in RELEASES:
         record.append_row(census_row(store, release))

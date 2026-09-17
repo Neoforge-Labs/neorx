@@ -75,7 +75,7 @@ def test_a_dated_build_runs_from_the_pinned_release_table(tmp_path, monkeypatch)
     from experiments.dated_build import build_row
 
     _stub_live(monkeypatch)
-    row = build_row(_store(tmp_path), "HIV infection", DISEASE_ID, "2018-06")
+    row = build_row(_store(tmp_path), "HIV infection", (DISEASE_ID,), "2018-06")
 
     # The releases come from the table, not from the caller.
     assert row["opentargets_release"] == "18.06"
@@ -96,7 +96,7 @@ def test_the_row_carries_the_omnipath_staleness_beside_the_numbers(
     from experiments.dated_build import build_row
 
     _stub_live(monkeypatch)
-    row = build_row(_store(tmp_path), "HIV infection", DISEASE_ID, "2018-06")
+    row = build_row(_store(tmp_path), "HIV infection", (DISEASE_ID,), "2018-06")
     assert row["omnipath_data_as_of"] == "2018-06-14"
 
 
@@ -131,7 +131,7 @@ def test_exclusions_are_recorded_with_their_source_not_counted(
             ),
         ],
     )
-    row = build_row(_store(tmp_path), "HIV infection", DISEASE_ID, "2018-06")
+    row = build_row(_store(tmp_path), "HIV infection", (DISEASE_ID,), "2018-06")
 
     by_reason = {e["reason"]: e for e in row["frame_exclusions"]}
     assert by_reason["off_frame"]["symbol"] == "OFFFRAME"
@@ -159,7 +159,7 @@ def test_the_timing_is_recorded_and_the_ratio_is_absent_without_a_live_run(
     from experiments.dated_build import build_row
 
     _stub_live(monkeypatch)
-    row = build_row(_store(tmp_path), "HIV infection", DISEASE_ID, "2018-06")
+    row = build_row(_store(tmp_path), "HIV infection", (DISEASE_ID,), "2018-06")
     assert row["snapshot_seconds"] >= 0.0
     assert row["live_seconds"] is None
     assert row["speedup"] is None
@@ -205,73 +205,138 @@ def test_the_experiment_declares_that_it_reads_snapshots(tmp_path):
 # is the recurring pattern on this branch, so they are pinned directly.
 
 
-def test_running_a_reads_snapshots_experiment_actually_cites_extracts(
-    tmp_path, monkeypatch
-):
-    """The wiring, not the flag.
+def _entry(source, release, digest):
+    from neorx.snapshots.manifest import SnapshotEntry
 
-    Replacing the runner's `snapshot_manifest=... if defn.reads_snapshots`
-    with `None` left every test green: one test asserted the flag was
-    True, another asserted RunRecord.create works when handed a manifest,
-    and nothing asserted that running the experiment connects them.
+    return SnapshotEntry(
+        source=source,
+        release=release,
+        url=f"https://example.invalid/{source}/{release}",
+        sha256=digest * 64,
+        extractor_version=2,
+        rows=2,
+    )
+
+
+def _run_dated(tmp_path, monkeypatch, store):
+    import experiments.dated_build as db
+    from neorx.experiments.registry import run_experiment
+
+    _stub_live(monkeypatch)
+    monkeypatch.setattr(db, "STORE_ROOT", store.root)
+    monkeypatch.setattr(db, "DISEASES", (("HIV infection", (DISEASE_ID,)),))
+    monkeypatch.setattr(db, "TIME_POINTS", {"2018-06": db.TIME_POINTS["2018-06"]})
+    return run_experiment("dated-build", runs_dir=tmp_path / "runs")
+
+
+def test_running_the_experiment_cites_exactly_what_it_read(tmp_path, monkeypatch):
+    """The wiring, end to end, through the real runner.
+
+    A build reads the OpenTargets extract AND the OmniPath extract, so
+    both must be cited -- and nothing else, even though the manifest also
+    describes a 25.06 extract the run never opened.
     """
     import json
 
-    import experiments.dated_build as db
-    from neorx.experiments.registry import run_experiment
-    from neorx.snapshots.manifest import SnapshotEntry, write_entry
+    from neorx.snapshots.manifest import write_entry
 
     store = _store(tmp_path)
-    manifest = store.root / "manifest.toml"
-    write_entry(
-        manifest,
-        SnapshotEntry(
-            source="opentargets",
-            release="18.06",
-            url="https://example.invalid/18.06",
-            sha256="a" * 64,
-            extractor_version=2,
-            rows=2,
-        ),
-    )
-    _stub_live(monkeypatch)
-    monkeypatch.setattr(db, "STORE_ROOT", store.root)
-    monkeypatch.setattr(db, "DISEASES", (("HIV infection", DISEASE_ID),))
-    monkeypatch.setattr(
-        db, "TIME_POINTS", {"2018-06": db.TIME_POINTS["2018-06"]}
-    )
+    for entry in (
+        _entry("opentargets", "18.06", "a"),
+        _entry("omnipath", "20180614-20181114", "b"),
+        _entry("opentargets", "25.06", "c"),
+    ):
+        write_entry(store.manifest_path, entry)
 
-    record = run_experiment(
-        "dated-build", runs_dir=tmp_path / "runs", snapshot_manifest=manifest
-    )
+    record = _run_dated(tmp_path, monkeypatch, store)
     env = json.loads((record.path / "env.json").read_text())
+    assert set(env["snapshots"]) == {
+        "opentargets/18.06",
+        "omnipath/20180614-20181114",
+    }
     assert env["snapshots"]["opentargets/18.06"]["sha256"] == "a" * 64
 
 
-def test_a_run_that_cites_nothing_is_refused_rather_than_completed(
-    tmp_path, monkeypatch
-):
-    """Extracts present, manifest absent: the defect the flag was meant to fix.
+def test_a_run_whose_extracts_have_no_manifest_is_refused(tmp_path, monkeypatch):
+    """Extracts present, manifest absent.
 
-    Before this, such a run read the extracts, wrote "snapshots": {}, and
+    Such a run once read the extracts, wrote "snapshots": {}, and
     finalised `complete` -- a number with no traceable derivation, which
     is what this project found in four published papers.
     """
-    import experiments.dated_build as db
     from neorx.experiments.record import ProvenanceError
-    from neorx.experiments.registry import run_experiment
 
     store = _store(tmp_path)  # extracts exist, no manifest written
-    _stub_live(monkeypatch)
-    monkeypatch.setattr(db, "STORE_ROOT", store.root)
+    with pytest.raises(ProvenanceError) as excinfo:
+        _run_dated(tmp_path, monkeypatch, store)
+    assert "opentargets/18.06" in str(excinfo.value)
+
+
+def test_an_unrelated_manifest_entry_does_not_satisfy_the_citation(
+    tmp_path, monkeypatch
+):
+    """The check once accepted ANY citation.
+
+    Executed by a reviewer: a manifest describing only a 25.06 extract let
+    a run over 18.06 complete, marked complete, citing the wrong release.
+    """
+    from neorx.experiments.record import ProvenanceError
+    from neorx.snapshots.manifest import write_entry
+
+    store = _store(tmp_path)
+    write_entry(store.manifest_path, _entry("opentargets", "25.06", "c"))
+    with pytest.raises(ProvenanceError):
+        _run_dated(tmp_path, monkeypatch, store)
+
+
+def test_a_partly_described_store_is_refused(tmp_path, monkeypatch):
+    # OpenTargets is described, OmniPath is not. The run read both, so the
+    # numbers depend on an extract it cannot identify.
+    from neorx.experiments.record import ProvenanceError
+    from neorx.snapshots.manifest import write_entry
+
+    store = _store(tmp_path)
+    write_entry(store.manifest_path, _entry("opentargets", "18.06", "a"))
+    with pytest.raises(ProvenanceError) as excinfo:
+        _run_dated(tmp_path, monkeypatch, store)
+    assert "omnipath/20180614-20181114" in str(excinfo.value)
+
+
+def test_a_refused_run_is_recorded_as_failed(tmp_path, monkeypatch):
+    import json
+
+    from neorx.experiments.record import ProvenanceError
+
+    store = _store(tmp_path)
+    with pytest.raises(ProvenanceError):
+        _run_dated(tmp_path, monkeypatch, store)
+    (run_dir,) = (tmp_path / "runs").iterdir()
+    summary = json.loads((run_dir / "record.json").read_text())
+    assert summary["status"] == "failed"
+    assert summary["citable"] is False
+
+
+def test_declaring_reads_snapshots_without_reading_through_the_record_is_refused(
+    tmp_path,
+):
+    """A store opened some other way reads nothing the record can cite.
+
+    `reads_snapshots` is how the runner knows to expect reads. An
+    experiment that declares it and records none has opened its store
+    directly, so everything it read is invisible to the citation.
+    """
+    from neorx.experiments.record import ProvenanceError
+    from neorx.experiments.registry import experiment, run_experiment
+
+    store = _store(tmp_path)
+
+    @experiment(name="bypasses-the-record", reads_snapshots=True)
+    def _bypass(record):
+        record.append_row({"n": store.associations("18.06").height})
 
     with pytest.raises(ProvenanceError) as excinfo:
-        run_experiment(
-            "dated-build",
-            runs_dir=tmp_path / "runs",
-            snapshot_manifest=store.root / "manifest.toml",
-        )
-    assert "reads_snapshots" in str(excinfo.value)
+        run_experiment("bypasses-the-record", runs_dir=tmp_path / "runs")
+    assert "snapshot_store" in str(excinfo.value)
 
 
 def test_withheld_material_is_recorded_per_source(tmp_path, monkeypatch):
@@ -296,7 +361,7 @@ def test_withheld_material_is_recorded_per_source(tmp_path, monkeypatch):
             )
         ],
     )
-    row = build_row(_store(tmp_path), "HIV infection", DISEASE_ID, "2018-06")
+    row = build_row(_store(tmp_path), "HIV infection", (DISEASE_ID,), "2018-06")
 
     withheld = [e for e in row["frame_exclusions"] if e["reason"] == "withheld"]
     assert withheld, "in-frame material refused anyway must still be recorded"
@@ -309,18 +374,65 @@ def test_a_disease_id_the_release_does_not_carry_is_refused(
 ):
     """Zeros read as a finding; this is a fact about the id.
 
-    OpenTargets keys diseases by EFO in the 18.06 era and by MONDO from
-    21.x, so pairing one id with every time point silently recorded
-    n_genes: 0 rows indistinguishable from "this release recorded no
-    genetic evidence".
+    OpenTargets re-keys diseases between releases -- in 26.06,
+    EFO_0000764 no longer resolves and HIV is MONDO_0005109 -- so an id
+    that is right for one release can be absent from another, and the
+    build would silently record n_genes: 0.
     """
     from experiments.dated_build import UnknownDiseaseForRelease, build_row
 
     _stub_live(monkeypatch)
     with pytest.raises(UnknownDiseaseForRelease) as excinfo:
         build_row(
-            _store(tmp_path), "Alzheimer disease", "MONDO_0004975", "2018-06"
+            _store(tmp_path), "Alzheimer disease", ("MONDO_0004975",), "2018-06"
         )
     message = str(excinfo.value)
     assert "MONDO_0004975" in message
     assert "18.06" in message
+
+
+def test_the_release_decides_which_candidate_id_is_used(tmp_path, monkeypatch):
+    # Both keys HIV has held are offered; the extract carries one of them,
+    # and that is the id recorded -- whichever order they were listed in.
+    from experiments.dated_build import build_row
+
+    _stub_live(monkeypatch)
+    row = build_row(
+        _store(tmp_path), "HIV infection", ("MONDO_0005109", DISEASE_ID), "2018-06"
+    )
+    assert row["disease_id"] == DISEASE_ID
+    assert row["n_genes"] == 2
+
+
+def test_two_candidates_both_present_is_refused_as_ambiguous():
+    """Either could be the disease meant, so neither is picked silently."""
+    from experiments.dated_build import UnknownDiseaseForRelease, resolve_disease_id
+
+    associations = pl.DataFrame(
+        {
+            "target_id": ["E1", "E2"],
+            "target_symbol": ["A", "B"],
+            "disease_id": ["EFO_0000764", "MONDO_0005109"],
+            "datatype": ["genetic_association"] * 2,
+            "score": [0.5, 0.5],
+        },
+        schema=ASSOCIATION_COLUMNS,
+    )
+    with pytest.raises(UnknownDiseaseForRelease) as excinfo:
+        resolve_disease_id(
+            associations, "HIV infection", ("EFO_0000764", "MONDO_0005109"), "18.06"
+        )
+    assert "cannot be merged" in str(excinfo.value)
+
+
+def test_the_shipped_disease_table_only_offers_ids_that_name_one_disease():
+    """HIV's two keys are verified to be the same disease.
+
+    In the live 26.06 release MONDO_0005109's dbXRefs list EFO:0000764.
+    Alzheimer's and type 2 diabetes list no EFO cross-reference, so their
+    pre-MONDO keys could not be established and they are not shipped --
+    an invented id risks matching a different disease in an older release.
+    """
+    from experiments.dated_build import DISEASES
+
+    assert DISEASES == (("HIV infection", ("MONDO_0005109", "EFO_0000764")),)

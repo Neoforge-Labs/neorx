@@ -268,12 +268,9 @@ def _fingerprint(graph):
         # what live UniProt answered. Every score was invariant and a
         # persisted, user-visible field was not.
         #
-        # So the whole model is compared, minus the two fields that are
+        # So the whole model is compared, minus only the two fields
         # DESIGNED to differ: build_timestamp, and frame_exclusions, which
         # is the record OF the difference.
-        # Everything, minus only the two fields DESIGNED to differ:
-        # build_timestamp, and frame_exclusions, which is the record OF
-        # the difference.
         #
         # An earlier version of this also dropped `nodes` and `edges` on
         # the grounds that the dimensions above cover them. They did not:

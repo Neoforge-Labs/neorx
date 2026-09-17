@@ -33,19 +33,20 @@ external services.
 from __future__ import annotations
 
 import time
-from pathlib import Path
 
 import polars as pl
 
 from neorx.core.graph.graph_builder import build_disease_graph
-from neorx.experiments.record import RunRecord
+from neorx.experiments.record import SNAPSHOTS_DIR, RunRecord
 from neorx.experiments.registry import experiment
 from neorx.snapshots.reader import SnapshotStore
 from neorx.snapshots.releases import TIME_POINTS, release_for
 from neorx.snapshots.resolver import SourceResolver
 
-# Matches the default `--root` of `neorx snapshot build`.
-STORE_ROOT = Path("snapshots")
+# The repository's snapshot store, anchored to the repo root rather than
+# the cwd. A relative path let a run launched from a subdirectory read one
+# store while its record cited another's manifest.
+STORE_ROOT = SNAPSHOTS_DIR
 
 
 class UnknownDiseaseForRelease(KeyError):
@@ -56,16 +57,33 @@ class UnknownDiseaseForRelease(KeyError):
     """
 
 
-# Diseases to build, as (name, EFO id). A dated build requires the id:
-# the extract is keyed on it and carries no disease names, and resolving a
-# name through the OpenTargets API would be a live call inside a dated
-# build. These are three of the original seven-disease benchmark, kept so
-# the new numbers can be set beside the old ones -- with every caveat in
-# the corrigendum audit attached.
-DISEASES: tuple[tuple[str, str], ...] = (
-    ("HIV infection", "EFO_0000764"),
-    ("Alzheimer disease", "MONDO_0004975"),
-    ("type 2 diabetes mellitus", "MONDO_0005148"),
+# Diseases to build, as (name, candidate ids). A dated build requires an
+# id: the extract is keyed on one and carries no disease names, and
+# resolving a name through the OpenTargets API would be a live call inside
+# a dated build.
+#
+# One id per disease does not work, because OpenTargets RE-KEYS diseases
+# between releases. Checked against the live API (release 26.06):
+# EFO_0000764 -- the id this sub-project used throughout -- no longer
+# resolves at all, and HIV is now MONDO_0005109, whose dbXRefs list
+# "EFO:0000764". So the two are the same disease under different keys, and
+# which key a given release uses is a property of that release.
+#
+# Rather than guess per era, `build_row` resolves the id against the
+# release's own extract: exactly one candidate present is the id, none is
+# a refusal, and more than one is an ambiguity it also refuses. The pinned
+# data is the authority, so no era-to-id table can go stale.
+#
+# Only HIV ships configured. Alzheimer's and type 2 diabetes are held back
+# deliberately: their MONDO ids (MONDO_0004975, MONDO_0005148) are
+# verified in 26.06, but neither lists an EFO cross-reference, so their
+# pre-MONDO keys cannot be established from the API and inventing one
+# risks matching a DIFFERENT disease that happens to hold that id in an
+# older release. Add them in sub-project 5, taking the ids from the
+# corpus-census rows for each built extract, which list the disease ids
+# each release actually carries.
+DISEASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("HIV infection", ("MONDO_0005109", "EFO_0000764")),
 )
 
 # Off by default: a live build is minutes per disease across eight
@@ -84,10 +102,48 @@ def dated_resolver(store: SnapshotStore) -> SourceResolver:
     return SourceResolver(store=store, release_for=release_for, live={})
 
 
+def resolve_disease_id(
+    associations: pl.DataFrame,
+    disease: str,
+    candidates: tuple[str, ...],
+    release: str,
+) -> str:
+    """Which of ``candidates`` this release actually keys ``disease`` by.
+
+    An id the release does not carry yields an empty frame, and an empty
+    frame is indistinguishable in a results table from "this release
+    recorded no genetic evidence for this disease" -- one is a
+    configuration mistake and the other is a finding. So the release's own
+    extract decides, and both failures are loud: none present is a wrong
+    configuration, and more than one present cannot be resolved here
+    because either could be the disease meant.
+    """
+    present = [
+        c for c in candidates
+        if associations.filter(pl.col("disease_id") == c).height > 0
+    ]
+    if len(present) == 1:
+        return present[0]
+    if not present:
+        raise UnknownDiseaseForRelease(
+            f"none of {list(candidates)} appears in the OpenTargets "
+            f"{release} extract, so a build for {disease!r} would record "
+            f"zeros indistinguishable from an absence of evidence. Take the "
+            f"id this release uses from its corpus-census row, which lists "
+            f"the disease ids the extract carries."
+        )
+    raise UnknownDiseaseForRelease(
+        f"{present} all appear in the OpenTargets {release} extract for "
+        f"{disease!r}. They cannot be merged here: each may carry different "
+        f"evidence, and picking one would be a silent choice about which "
+        f"population the numbers describe."
+    )
+
+
 def build_row(
     store: SnapshotStore,
     disease: str,
-    disease_id: str,
+    candidates: tuple[str, ...],
     as_of: str,
 ) -> dict:
     """One dated build, timed, with its exclusions.
@@ -95,23 +151,10 @@ def build_row(
     Pure enough to unit-test: everything it needs arrives as an argument,
     and it returns a row rather than writing one.
     """
-    # A disease id the release does not carry yields an empty frame, and
-    # an empty frame is indistinguishable in a results table from "this
-    # release recorded no genetic evidence for this disease" -- one is a
-    # configuration mistake and the other is a finding. OpenTargets keyed
-    # diseases differently across eras (EFO in 18.06, MONDO from the 21.x
-    # era), so pairing one id with every time point silently produces
-    # zeros for the eras that do not use it.
-    associations = store.associations(release_for("opentargets", as_of))
-    if associations.filter(pl.col("disease_id") == disease_id).height == 0:
-        raise UnknownDiseaseForRelease(
-            f"{disease_id!r} appears nowhere in the OpenTargets "
-            f"{release_for('opentargets', as_of)} extract, so a build at "
-            f"{as_of} would record zeros indistinguishable from an absence "
-            f"of evidence. Check the id this release uses for "
-            f"{disease!r} -- OpenTargets keys diseases by EFO in the 18.06 "
-            f"era and by MONDO from 21.x."
-        )
+    release = release_for("opentargets", as_of)
+    disease_id = resolve_disease_id(
+        store.associations(release), disease, candidates, release
+    )
 
     started = time.perf_counter()
     graph = build_disease_graph(
@@ -172,13 +215,14 @@ def dated_build(record: RunRecord) -> None:
     One row per (disease, time point), appended as each completes, so a
     run that fails partway keeps the rows it already wrote.
 
-    It does NOT survive a missing extract: the resolver raises
-    ``UnpinnedSourceError`` and the run finalises `failed` with the rows
-    so far. That is deliberate -- catching it here to keep going would be
+    It does NOT survive a missing extract: reading it raises
+    ``SnapshotMissingError`` (or ``UnpinnedSourceError``, whichever the
+    build reaches first) and the run finalises `failed` with the rows so
+    far. That is deliberate -- catching it here to keep going would be
     swallowing the one error that says a dated build could not be pinned.
     Build the extracts first.
     """
-    store = SnapshotStore(STORE_ROOT)
+    store = record.snapshot_store(STORE_ROOT)
     for as_of in sorted(TIME_POINTS):
-        for disease, disease_id in DISEASES:
-            record.append_row(build_row(store, disease, disease_id, as_of))
+        for disease, candidates in DISEASES:
+            record.append_row(build_row(store, disease, candidates, as_of))

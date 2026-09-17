@@ -21,8 +21,13 @@ from pathlib import Path
 from typing import Any
 
 from neorx.snapshots.manifest import read_manifest
+from neorx.snapshots.reader import SnapshotStore
 
 RUNS_DIR = Path(__file__).resolve().parents[3] / "runs"
+# Where `neorx snapshot build` writes in this repository. Anchored the same
+# way as RUNS_DIR: a cwd-relative path let a run launched from a
+# subdirectory read one store while the runner cited another's manifest.
+SNAPSHOTS_DIR = Path(__file__).resolve().parents[3] / "snapshots"
 # ~7 MB per disease measured on a live neorx-7disease run; seven diseases
 # ~= 49 MB, so 250 MB leaves genuine headroom while still catching a
 # runaway snapshot. (The original 50 MB figure was a spec estimate of
@@ -94,6 +99,8 @@ class RunRecord:
         # falls back to run_id via getattr for the latter).
         self._started: datetime | None = None
         self._experiment: str | None = None
+        # (source, release) -> the manifest that describes the extract read.
+        self._snapshot_reads: dict[tuple[str, str], Path] = {}
 
     # -- construction --------------------------------------------------
 
@@ -104,7 +111,6 @@ class RunRecord:
         *,
         runs_dir: Path | None = None,
         allow_large: bool = False,
-        snapshot_manifest: Path | None = None,
     ) -> RunRecord:
         started = datetime.now(UTC)
         sha = _git_sha()
@@ -126,24 +132,6 @@ class RunRecord:
         rec._experiment = experiment
         (path / "rows.jsonl").touch()
 
-        # The whole entry, not a chosen subset. A digest pins which bytes
-        # an extract was, not what they meant, and recovering the meaning
-        # needs the manifest -- which `write_entry` replaces in place for
-        # a given (source, release). Rebuild an extract after fixing its
-        # extractor and the earlier entry is gone, leaving a months-old
-        # run citing a digest nothing can interpret. `synthesised_consensus`
-        # is what makes that bite: it says whether OmniPath's consensus
-        # direction was read or derived, which changes what every directed
-        # edge in a dated graph means. Choosing a subset would mean
-        # predicting which fields carry meaning, and `source` and `release`
-        # are the only two safe to drop because they are the key.
-        snapshots: dict[str, dict[str, Any]] = {}
-        if snapshot_manifest is not None:
-            for (source, release), entry in read_manifest(snapshot_manifest).items():
-                fields = asdict(entry)
-                del fields["source"], fields["release"]
-                snapshots[f"{source}/{release}"] = fields
-
         (path / "env.json").write_text(
             json.dumps(
                 {
@@ -153,12 +141,86 @@ class RunRecord:
                     "platform": platform.platform(),
                     "started_utc": started.isoformat(),
                     "deps": _dep_versions(),
-                    "snapshots": snapshots,
+                    # Filled by settle_snapshot_citations once the run has
+                    # read what it reads -- a citation is a statement about
+                    # what produced the numbers, so it cannot be written
+                    # before any were produced.
+                    "snapshots": {},
                 },
                 indent=2,
             )
         )
         return rec
+
+    # -- snapshot provenance --------------------------------------------
+
+    def snapshot_store(self, root: Path) -> SnapshotStore:
+        """A snapshot store whose every read is recorded against this run.
+
+        Experiments open stores through this rather than constructing one
+        directly, so what gets cited is what was read -- not the whole
+        manifest, and not a manifest found by a second path that could
+        name a different store.
+        """
+        manifest = SnapshotStore(root).manifest_path
+
+        def note(source: str, release: str) -> None:
+            key = (source, release)
+            seen = self._snapshot_reads.get(key)
+            if seen is not None and seen != manifest:
+                raise ProvenanceError(
+                    f"{source}/{release} was read from two stores in one run "
+                    f"({seen.parent} and {manifest.parent}); a citation keyed "
+                    f"by source and release cannot say which produced the "
+                    f"numbers."
+                )
+            self._snapshot_reads[key] = manifest
+
+        return SnapshotStore(root, on_read=note)
+
+    @property
+    def snapshot_reads(self) -> list[tuple[str, str]]:
+        """Every (source, release) this run read, in a stable order."""
+        return sorted(self._snapshot_reads)
+
+    def settle_snapshot_citations(self) -> list[str]:
+        """Cite exactly the extracts this run read; return any it could not.
+
+        Each citation is the whole manifest entry, not a chosen subset. A
+        digest pins which bytes an extract was, not what they meant, and
+        the manifest that says what they meant is replaced in place when an
+        extract is rebuilt -- so a run record that kept only the digest
+        would, months later, cite something nothing can interpret.
+        `synthesised_consensus` is what makes that bite: it says whether
+        OmniPath's consensus direction was read or derived, which changes
+        what every directed edge in a dated graph means. `source` and
+        `release` are dropped only because they are the key.
+
+        A read whose extract has no manifest entry is not silently left
+        out: it is written under `snapshots_uncited` and returned, so the
+        caller decides whether that is fatal and the record says so either
+        way.
+        """
+        manifests: dict[Path, dict] = {}
+        cited: dict[str, dict[str, Any]] = {}
+        uncited: list[str] = []
+        for (source, release), manifest in sorted(self._snapshot_reads.items()):
+            if manifest not in manifests:
+                manifests[manifest] = read_manifest(manifest)
+            entry = manifests[manifest].get((source, release))
+            if entry is None:
+                uncited.append(f"{source}/{release}")
+                continue
+            fields = asdict(entry)
+            del fields["source"], fields["release"]
+            cited[f"{source}/{release}"] = fields
+
+        env_path = self.path / "env.json"
+        env = json.loads(env_path.read_text(encoding="utf-8"))
+        env["snapshots"] = cited
+        env["snapshots_uncited"] = uncited
+        env_path.write_text(json.dumps(env, indent=2), encoding="utf-8")
+        return uncited
 
     @classmethod
     def load(cls, run_id: str, *, runs_dir: Path | None = None) -> RunRecord:

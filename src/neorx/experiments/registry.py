@@ -7,7 +7,6 @@ never decides where results go -- the runner does both. That is what makes
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,11 +32,11 @@ class ExperimentDef:
     #: toward the replay's IDENTICAL/DIFFERS verdict. They are still
     #: reported (see ReplayResult.volatile_diffs), never silently dropped.
     volatile_fields: tuple[str, ...] = ()
-    #: Declares that this experiment reads pinned snapshots, so its run
-    #: record must cite which extracts produced its numbers. The
-    #: experiment declares the need; the runner supplies the manifest
-    #: path, for the same reason it chooses the HTTP capture mode -- only
-    #: the caller knows where the store lives.
+    #: Declares that this experiment reads pinned snapshots. It must open
+    #: them with ``record.snapshot_store(root)``; the runner then cites
+    #: exactly what was read and refuses a declared experiment that
+    #: recorded no reads, since that means a store was opened some other
+    #: way and nothing it read is cited.
     reads_snapshots: bool = False
 
 
@@ -99,40 +98,40 @@ def list_experiments() -> list[ExperimentDef]:
     return [_REGISTRY[k] for k in sorted(_REGISTRY)]
 
 
-def _cited_snapshots(record: RunRecord) -> dict:
-    """What the record's env.json actually cites."""
-    env = json.loads((record.path / "env.json").read_text(encoding="utf-8"))
-    return env.get("snapshots") or {}
+def settle_or_refuse(record: RunRecord, name: str, *, declared: bool) -> None:
+    """Cite what the run read, and refuse a run whose inputs cannot be named.
 
+    Called after a run completes, by both the runner and replay, so the two
+    cannot drift apart -- they did once, and a replay cited nothing while
+    reporting `identical: True`.
 
-# Where `neorx snapshot build` writes by default, so a run reads the
-# manifest the CLI wrote without a second place to configure one path.
-# Anchored to the repo root rather than the cwd, the same way RUNS_DIR is:
-# a relative path made a replay launched from a subdirectory cite nothing
-# while still reporting `identical: True`.
-SNAPSHOT_MANIFEST = Path(__file__).resolve().parents[3] / "snapshots" / "manifest.toml"
+    Two refusals. A read with no manifest entry: the extracts were there
+    and the manifest describing them was not, so the run produced numbers
+    from inputs it cannot identify -- the failure this project found in
+    four published papers. And an experiment that declares
+    `reads_snapshots` but recorded no reads: it opened a store some way
+    other than `RunRecord.snapshot_store`, so nothing it read was tracked.
 
-
-def require_citation(record: RunRecord, name: str, manifest: Path | None) -> None:
-    """Refuse a run that reads pinned extracts and cannot name them.
-
-    The declaration buys a path, not a guarantee: a store whose extracts
-    are present but whose manifest is missing produced a run that read
-    those extracts, wrote ``"snapshots": {}``, and finalised complete -- a
-    number with no traceable derivation, which is the exact failure this
-    project found in four published papers. A run that cannot say what
-    produced it is a failed run, not a quiet one.
+    What it deliberately does NOT accept is "some citation exists". The
+    earlier check did, and a run over the 18.06 release completed while
+    citing only a 25.06 entry that happened to be in the manifest.
     """
-    if _cited_snapshots(record):
-        return
-    record.finalise("failed")
-    raise ProvenanceError(
-        f"experiment {name!r} declares reads_snapshots, but no snapshot "
-        f"was cited: {manifest} is missing or has no entries. Build the "
-        f"extracts with `neorx snapshot build`, which writes the manifest "
-        f"beside them. Running without it would report numbers derived "
-        f"from extracts the record cannot name."
-    )
+    uncited = record.settle_snapshot_citations()
+    if uncited:
+        record.finalise("failed")
+        raise ProvenanceError(
+            f"{name!r} read {', '.join(uncited)}, which the store's manifest "
+            f"does not describe. The run produced numbers from extracts it "
+            f"cannot identify. Rebuild them with `neorx snapshot build`, "
+            f"which writes the manifest entry beside each extract."
+        )
+    if declared and not record.snapshot_reads:
+        record.finalise("failed")
+        raise ProvenanceError(
+            f"{name!r} declares reads_snapshots but recorded no reads. Open "
+            f"stores with `record.snapshot_store(root)` rather than "
+            f"constructing SnapshotStore directly, or nothing read is cited."
+        )
 
 
 def run_experiment(
@@ -140,25 +139,14 @@ def run_experiment(
     *,
     allow_large: bool = False,
     runs_dir: Path | None = None,
-    snapshot_manifest: Path | None = SNAPSHOT_MANIFEST,
 ) -> RunRecord:
     """Execute an experiment, writing its record whatever the outcome.
 
-    An experiment that declares ``reads_snapshots`` gets its extracts
-    cited in ``env.json``. One that does not gets an empty ``snapshots``
-    object, which is accurate: it read none.
+    ``env.json`` cites exactly the extracts the run read, taken from the
+    manifest of the store it read them from.
     """
     defn = get_experiment(name)
-    record = RunRecord.create(
-        name,
-        runs_dir=runs_dir,
-        allow_large=allow_large,
-        snapshot_manifest=(
-            snapshot_manifest if defn.reads_snapshots else None
-        ),
-    )
-    if defn.reads_snapshots:
-        require_citation(record, name, snapshot_manifest)
+    record = RunRecord.create(name, runs_dir=runs_dir, allow_large=allow_large)
     try:
         if defn.captures_http:
             with capture(record, mode="record"):
@@ -166,7 +154,12 @@ def run_experiment(
         else:
             defn.fn(record)
     except BaseException:
+        # Cite what was read before the failure. The original error is the
+        # one that propagates; the record still says what the partial rows
+        # came from, and lists any read it could not cite.
+        record.settle_snapshot_citations()
         record.finalise("failed")
         raise
+    settle_or_refuse(record, name, declared=defn.reads_snapshots)
     record.finalise("complete")
     return record

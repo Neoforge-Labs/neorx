@@ -151,62 +151,77 @@ def test_prune_keeps_the_numbers_and_drops_only_the_inputs(tmp_path):
 
 # ── A replay must cite its extracts, or refuse ──────────────────────
 #
-# run_experiment refuses a run that reads pinned extracts and cannot name
-# them; replay_experiment did not, so replaying a dated run produced a
-# record whose env.json said "snapshots": {} while reporting
-# identical: True over rows derived from those extracts. That is worse
-# than a run that cannot cite: it asserts agreement between two sets of
-# numbers whose inputs it cannot identify.
+# run_experiment settled citations and replay_experiment did not, so
+# replaying a dated run produced a record whose env.json said
+# "snapshots": {} while reporting identical: True over rows derived from
+# extracts. That is worse than a run that cannot cite: it asserts
+# agreement between two sets of numbers whose inputs it cannot identify.
+# Both now call the same settle_or_refuse.
 
 
-def test_replaying_a_snapshot_reading_experiment_without_a_manifest_is_refused(
-    tmp_path, monkeypatch
-):
-    import neorx.experiments.replay as replay_mod
-    from neorx.experiments.record import ProvenanceError, RunRecord
+def _definition(fn, *, reads_snapshots):
     from neorx.experiments.registry import ExperimentDef
 
-    record = RunRecord.create("citer", runs_dir=tmp_path / "runs")
-    record.append_row({"n": 1})
-    record.finalise("complete")
+    return ExperimentDef(name="citer", help="", fn=fn, reads_snapshots=reads_snapshots)
 
-    defn = ExperimentDef(
-        name="citer",
-        help="",
-        fn=lambda rec: rec.append_row({"n": 1}),
-        reads_snapshots=True,
-    )
+
+def _replay_with(tmp_path, monkeypatch, defn):
+    import neorx.experiments.replay as replay_mod
+
+    original = RunRecord.create("citer", runs_dir=tmp_path / "runs")
+    original.append_row({"n": 1})
+    original.finalise("complete")
     monkeypatch.setattr(replay_mod, "get_experiment", lambda _name: defn)
-    # Point the manifest somewhere that does not exist, which is exactly
-    # the case that used to pass silently.
-    monkeypatch.setattr(
-        replay_mod, "SNAPSHOT_MANIFEST", tmp_path / "absent" / "manifest.toml"
+    return replay_mod.replay_experiment(original.run_id, runs_dir=tmp_path / "runs")
+
+
+def _store_without_manifest(tmp_path):
+    import polars as pl
+
+    from neorx.snapshots.schema import ASSOCIATION_COLUMNS
+
+    root = tmp_path / "snapshots"
+    (root / "opentargets" / "18.06").mkdir(parents=True)
+    pl.DataFrame(schema=ASSOCIATION_COLUMNS).write_parquet(
+        root / "opentargets" / "18.06" / "associations.parquet"
     )
+    return root
+
+
+def test_a_replay_that_reads_an_undescribed_extract_is_refused(tmp_path, monkeypatch):
+    from neorx.experiments.record import ProvenanceError
+
+    root = _store_without_manifest(tmp_path)
+
+    def fn(rec):
+        rec.snapshot_store(root).associations("18.06")
+        rec.append_row({"n": 1})
 
     with pytest.raises(ProvenanceError) as excinfo:
-        replay_mod.replay_experiment(record.run_id, runs_dir=tmp_path / "runs")
+        _replay_with(tmp_path, monkeypatch, _definition(fn, reads_snapshots=True))
+    assert "opentargets/18.06" in str(excinfo.value)
+
+
+def test_a_replay_of_a_declared_experiment_that_records_no_reads_is_refused(
+    tmp_path, monkeypatch
+):
+    from neorx.experiments.record import ProvenanceError
+
+    def fn(rec):
+        rec.append_row({"n": 1})
+
+    with pytest.raises(ProvenanceError) as excinfo:
+        _replay_with(tmp_path, monkeypatch, _definition(fn, reads_snapshots=True))
     assert "reads_snapshots" in str(excinfo.value)
 
 
 def test_replaying_an_experiment_that_reads_no_snapshots_is_unaffected(
     tmp_path, monkeypatch
 ):
-    # The guard is about experiments that declare the need. Everything
-    # else replays exactly as before.
-    import neorx.experiments.replay as replay_mod
-    from neorx.experiments.record import RunRecord
-    from neorx.experiments.registry import ExperimentDef
+    # The refusal is about experiments that read extracts. Everything else
+    # replays exactly as before.
+    def fn(rec):
+        rec.append_row({"n": 1})
 
-    record = RunRecord.create("plain", runs_dir=tmp_path / "runs")
-    record.append_row({"n": 1})
-    record.finalise("complete")
-
-    defn = ExperimentDef(
-        name="plain",
-        help="",
-        fn=lambda rec: rec.append_row({"n": 1}),
-        reads_snapshots=False,
-    )
-    monkeypatch.setattr(replay_mod, "get_experiment", lambda _name: defn)
-    result = replay_mod.replay_experiment(record.run_id, runs_dir=tmp_path / "runs")
-    assert result is not None
+    result = _replay_with(tmp_path, monkeypatch, _definition(fn, reads_snapshots=False))
+    assert result.identical
