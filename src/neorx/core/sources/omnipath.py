@@ -36,6 +36,7 @@ import logging
 
 import requests
 
+from neorx.core.graph.dated_frame import match_key
 from neorx.core.graph.models import EdgeType, GraphEdge, GraphNode
 
 logger = logging.getLogger(__name__)
@@ -67,15 +68,32 @@ def _interactions_to_edges(
     Only directed interactions with a consensus direction become edges.
     A sign is claimed only when stimulation and inhibition do not
     contradict each other.
+
+    Membership of ``known_genes`` is tested through
+    ``dated_frame.match_key``, the project's one comparison rule. It was an
+    exact match, and the caller upper-cases its gene list while OmniPath
+    returns real HGNC spellings -- so every symbol carrying lowercase
+    (`C9orf72`, and 330 other `C#orf#` genes) lost its entire regulatory
+    layer from every live graph, silently. The dated path was fixed;
+    this is the same fault on the live one.
+
+    Case-insensitive matching is safe HERE in a way it is not for the
+    archive: ``query_omnipath`` asks the API for ``organisms=9606``, so
+    the rows are human already. The archive is 49% mouse and rat, which
+    is why that path filters organism before it relaxes case.
+
+    Edges keep the row's own spelling, which is the real HGNC symbol and
+    therefore the one the graph's nodes carry.
     """
     edges: list[GraphEdge] = []
+    known_keys = {match_key(g) for g in known_genes}
 
     for row in rows:
         source = (row.get("source_genesymbol") or "").strip()
         target = (row.get("target_genesymbol") or "").strip()
         if not source or not target or source == target:
             continue
-        if source not in known_genes or target not in known_genes:
+        if match_key(source) not in known_keys or match_key(target) not in known_keys:
             continue
         if not row.get("is_directed") or not row.get("consensus_direction"):
             continue

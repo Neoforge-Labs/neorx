@@ -109,3 +109,56 @@ def test_a_malformed_row_that_is_a_list_raises_rather_than_being_absorbed():
     # coerced into an empty result.
     with pytest.raises(AttributeError):
         _interactions_to_edges([["A", "B", "not", "a", "dict"]], {"A", "B"})
+
+
+# ── A mixed-case gene keeps its arrows on a live build ──────────────
+#
+# The dated path was fixed months of review ago; this is the same fault
+# on the live one. `graph_builder` upper-cases the gene list it queries
+# with, OmniPath returns real HGNC spellings, and the membership test was
+# exact -- so C9orf72 and the 330 other C#orf# genes lost their entire
+# regulatory layer from every live graph, with no log line.
+
+
+def test_a_mixed_case_gene_keeps_its_regulatory_edges():
+    from neorx.core.sources.omnipath import _interactions_to_edges
+
+    rows = [
+        {
+            "source_genesymbol": "CCR5",
+            "target_genesymbol": "C9orf72",
+            "is_directed": True,
+            "consensus_direction": True,
+            "is_stimulation": False,
+            "is_inhibition": True,
+            "sources": ["SIGNOR"],
+            "references": "",
+        }
+    ]
+    # What graph_builder actually passes: upper-cased symbols.
+    edges = _interactions_to_edges(rows, {"CCR5", "C9ORF72"})
+
+    assert len(edges) == 1
+    # The endpoints keep the row's real spelling, which is what the
+    # graph's own nodes are named, so the edge connects something.
+    assert edges[0].source_id == "gene:CCR5"
+    assert edges[0].target_id == "gene:C9orf72"
+
+
+def test_a_gene_outside_the_requested_set_is_still_excluded():
+    # Relaxing case must not relax membership.
+    from neorx.core.sources.omnipath import _interactions_to_edges
+
+    rows = [
+        {
+            "source_genesymbol": "CCR5",
+            "target_genesymbol": "UNRELATED",
+            "is_directed": True,
+            "consensus_direction": True,
+            "is_stimulation": True,
+            "is_inhibition": False,
+            "sources": ["SIGNOR"],
+            "references": "",
+        }
+    ]
+    assert _interactions_to_edges(rows, {"CCR5", "C9ORF72"}) == []
