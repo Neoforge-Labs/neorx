@@ -212,7 +212,7 @@ def _build(tmp_path, monkeypatch, *, live_active, tag):
     monkeypatch.setattr(gb, "get_cache", lambda: FileCache(cache_dir=root / "cache"))
 
     resolver = SourceResolver(
-        store=SnapshotStore(root / "snapshots"),
+        store=SnapshotStore(root / "snapshots", on_read=None),
         release_for=lambda _source, _as_of: RELEASE,
         live={"opentargets": empty, "omnipath": empty},
     )

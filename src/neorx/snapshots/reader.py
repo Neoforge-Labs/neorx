@@ -18,7 +18,14 @@ from pathlib import Path
 
 import polars as pl
 
-__all__ = ["SnapshotMissingError", "SnapshotStore"]
+__all__ = ["SNAPSHOTS_DIR", "SnapshotMissingError", "SnapshotStore"]
+
+# This repository's snapshot store. Anchored to the repo root rather than
+# the cwd, so `neorx snapshot build` writes where the experiments read: a
+# relative default meant a build run from a subdirectory produced a store
+# nothing would read, which is the write-side half of the defect that let
+# a run cite a manifest describing a different store.
+SNAPSHOTS_DIR = Path(__file__).resolve().parents[3] / "snapshots"
 
 
 class SnapshotMissingError(FileNotFoundError):
@@ -43,13 +50,24 @@ class SnapshotStore:
     def __init__(
         self,
         root: Path,
-        on_read: Callable[[str, str, Path], None] | None = None,
+        *,
+        on_read: Callable[[str, str, Path], None] | None,
     ) -> None:
         """``on_read(source, release, path)`` runs after every extract read.
 
         It is how a run record learns what a run actually read, so it can
         cite exactly that -- from this store's own manifest, rather than
         from a second path that might name a different store.
+
+        Required, with no default, deliberately. When it defaulted to
+        ``None`` an experiment could read one extract through
+        ``RunRecord.snapshot_store`` and another through a store it built
+        itself, and finish `complete` and `citable` while citing only the
+        first: the runner's guard fires when NO read was tracked, not when
+        some were missed. It cannot see a store it was never told about,
+        so the construction has to say. ``on_read=None`` is still
+        available -- for the CLI and for unit tests of the reader -- but
+        it is now written down rather than inherited.
         """
         self.root = Path(root)
         self._on_read = on_read

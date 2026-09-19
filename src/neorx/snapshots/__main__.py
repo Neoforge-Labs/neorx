@@ -22,7 +22,7 @@ import typer
 from neorx.snapshots.manifest import SnapshotEntry, digest_file, read_manifest, write_entry
 from neorx.snapshots.omnipath import read_archive_tsv
 from neorx.snapshots.opentargets import read_1806, read_2111, read_modern
-from neorx.snapshots.reader import SnapshotStore
+from neorx.snapshots.reader import SNAPSHOTS_DIR, SnapshotStore
 from neorx.snapshots.schema import EXTRACTOR_VERSION, ExtractNotes
 
 app = typer.Typer(
@@ -147,7 +147,12 @@ def _download(url: str) -> Path:
 def build_cmd(
     source: str = typer.Argument(..., help="Source name: opentargets, omnipath."),
     release: str = typer.Argument(..., help="Release identifier, e.g. 18.06, 21.11, 25.06."),
-    root: Path = typer.Option(Path("snapshots"), "--root", help="Snapshot store root."),
+    root: Path = typer.Option(
+        SNAPSHOTS_DIR,
+        "--root",
+        help="Snapshot store root. Defaults to the repository's own store, "
+        "which is where the experiments read from.",
+    ),
     from_file: Path | None = typer.Option(
         None, "--from-file", help="A local path already downloaded, in place of --url."
     ),
@@ -174,7 +179,7 @@ def build_cmd(
 
         frame, notes = _BUILDERS[source](release, local_path)
 
-        store = SnapshotStore(root)
+        store = SnapshotStore(root, on_read=None)
         # Reuses SnapshotStore's own path convention (source ->
         # filename) so the extract's write location and its read
         # location can never drift apart.
@@ -192,7 +197,7 @@ def build_cmd(
             rows=frame.height,
             synthesised_consensus=notes.consensus_direction_synthesised,
         )
-        write_entry(root / "manifest.toml", entry)
+        write_entry(SnapshotStore(root, on_read=None).manifest_path, entry)
     finally:
         # Only a fetched download is raw and disposable; a caller-supplied
         # --from-file is theirs to keep.
@@ -212,7 +217,12 @@ def build_cmd(
 
 @app.command("list")
 def list_cmd(
-    root: Path = typer.Option(Path("snapshots"), "--root", help="Snapshot store root."),
+    root: Path = typer.Option(
+        SNAPSHOTS_DIR,
+        "--root",
+        help="Snapshot store root. Defaults to the repository's own store, "
+        "which is where the experiments read from.",
+    ),
 ) -> None:
     """List every built snapshot: source, release, rows, extractor version, digest.
 
@@ -222,7 +232,7 @@ def list_cmd(
     carries it -- recording the flag in the manifest and then hiding it
     here would defeat the reason it is recorded at all.
     """
-    entries = read_manifest(root / "manifest.toml")
+    entries = read_manifest(SnapshotStore(root, on_read=None).manifest_path)
     if not entries:
         typer.echo("no snapshots built yet")
         return

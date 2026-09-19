@@ -241,7 +241,7 @@ def _dated_graph_probe(monkeypatch, tmp_path, loud):
         gb, "get_cache", lambda: FileCache(cache_dir=tmp_path / "c" / str(loud))
     )
     resolver = SourceResolver(
-        store=SnapshotStore(snap), release_for=lambda _s, _a: "18.06", live={}
+        store=SnapshotStore(snap, on_read=None), release_for=lambda _s, _a: "18.06", live={}
     )
     graph = gb.build_disease_graph(
         "d", as_of="2018-06", disease_id="EFO_1", resolver=resolver

@@ -17,7 +17,7 @@ def _store(tmp_path, rows):
     d = tmp_path / "opentargets" / "18.06"
     d.mkdir(parents=True)
     pl.DataFrame(rows, schema=ASSOCIATION_COLUMNS).write_parquet(d / "associations.parquet")
-    return SnapshotStore(tmp_path)
+    return SnapshotStore(tmp_path, on_read=None)
 
 
 def _row(symbol, disease, datatype="genetic_association", score=0.5):

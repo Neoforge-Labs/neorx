@@ -21,13 +21,9 @@ from pathlib import Path
 from typing import Any
 
 from neorx.snapshots.manifest import digest_file, read_manifest
-from neorx.snapshots.reader import SnapshotStore
+from neorx.snapshots.reader import SNAPSHOTS_DIR, SnapshotStore
 
 RUNS_DIR = Path(__file__).resolve().parents[3] / "runs"
-# Where `neorx snapshot build` writes in this repository. Anchored the same
-# way as RUNS_DIR: a cwd-relative path let a run launched from a
-# subdirectory read one store while the runner cited another's manifest.
-SNAPSHOTS_DIR = Path(__file__).resolve().parents[3] / "snapshots"
 # ~7 MB per disease measured on a live neorx-7disease run; seven diseases
 # ~= 49 MB, so 250 MB leaves genuine headroom while still catching a
 # runaway snapshot. (The original 50 MB figure was a spec estimate of
@@ -36,6 +32,9 @@ SNAPSHOTS_DIR = Path(__file__).resolve().parents[3] / "snapshots"
 MAX_RECORD_BYTES = 250 * 1024 * 1024
 
 _VALID_STATUS = ("complete", "incomplete", "failed")
+
+
+__all__ = ["SNAPSHOTS_DIR", "RunRecord"]
 
 
 class RecordTooLargeError(RuntimeError):
@@ -162,7 +161,9 @@ class RunRecord:
         manifest, and not a manifest found by a second path that could
         name a different store.
         """
-        manifest = SnapshotStore(root).manifest_path
+        # Resolved, so one physical store reached by two spellings -- a
+        # relative path and its absolute form -- is one store and not two.
+        manifest = SnapshotStore(root, on_read=None).manifest_path.resolve()
 
         def note(source: str, release: str, path: Path) -> None:
             key = (source, release)

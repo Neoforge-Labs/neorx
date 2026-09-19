@@ -27,7 +27,7 @@ def _store(tmp_path, release="18.06", rows=None):
         "disease_id": "EFO_1", "datatype": "genetic_association", "score": 0.6,
     }], schema=ASSOCIATION_COLUMNS)
     df.write_parquet(d / "associations.parquet")
-    return SnapshotStore(tmp_path)
+    return SnapshotStore(tmp_path, on_read=None)
 
 
 def test_reads_back_what_was_written(tmp_path):
@@ -64,7 +64,7 @@ def test_an_empty_extract_is_distinguishable_from_a_missing_one(tmp_path):
     d = tmp_path / "opentargets" / "99.99"
     d.mkdir(parents=True)
     empty_associations().write_parquet(d / "associations.parquet")
-    store = SnapshotStore(tmp_path)
+    store = SnapshotStore(tmp_path, on_read=None)
     assert store.has("opentargets", "99.99") is True
     assert store.associations("99.99").height == 0
 
@@ -86,7 +86,7 @@ def test_interactions_reads_back_what_was_written(tmp_path):
         schema=INTERACTION_COLUMNS,
     )
     df.write_parquet(d / "interactions.parquet")
-    store = SnapshotStore(tmp_path)
+    store = SnapshotStore(tmp_path, on_read=None)
     result = store.interactions("2024-01-15")
     assert result.height == 1
     assert result.row(0, named=True)["source_symbol"] == "EGFR"
@@ -96,7 +96,7 @@ def test_interactions_schema_matches_canonical(tmp_path):
     d = tmp_path / "omnipath" / "2024-01-15"
     d.mkdir(parents=True)
     empty_interactions().write_parquet(d / "interactions.parquet")
-    store = SnapshotStore(tmp_path)
+    store = SnapshotStore(tmp_path, on_read=None)
     assert dict(store.interactions("2024-01-15").schema) == INTERACTION_COLUMNS
 
 
@@ -104,7 +104,7 @@ def test_missing_interactions_raises_and_names_source_and_release(tmp_path):
     d = tmp_path / "omnipath" / "2024-01-15"
     d.mkdir(parents=True)
     empty_interactions().write_parquet(d / "interactions.parquet")
-    store = SnapshotStore(tmp_path)
+    store = SnapshotStore(tmp_path, on_read=None)
     with pytest.raises(SnapshotMissingError, match="2024-02-01"):
         store.interactions("2024-02-01")
     with pytest.raises(SnapshotMissingError, match="omnipath"):
@@ -133,9 +133,83 @@ def test_dispatch_to_interactions_not_associations(tmp_path):
     )
     ot_df.write_parquet(ot_d / "associations.parquet")
 
-    store = SnapshotStore(tmp_path)
+    store = SnapshotStore(tmp_path, on_read=None)
     # Omnipath should not be found for this release
     assert store.has("omnipath", "2024-01-15") is False
     # And interactions() should raise, not return the associations
     with pytest.raises(SnapshotMissingError):
         store.interactions("2024-01-15")
+
+
+def test_on_read_must_be_stated(tmp_path):
+    """A store cannot be built without saying whether its reads are tracked.
+
+    When `on_read` defaulted to None, an experiment could read one extract
+    through `RunRecord.snapshot_store` and another through a store it
+    built itself, then finish complete and citable while citing only the
+    first -- the runner's guard fires when NO read was tracked, not when
+    some were missed, and it cannot see a store it was never told about.
+    Opting out is still allowed; it just has to be written down.
+    """
+    import pytest
+
+    from neorx.snapshots.reader import SnapshotStore
+
+    with pytest.raises(TypeError):
+        SnapshotStore(tmp_path)  # type: ignore[call-arg]
+
+    # Both intents remain expressible.
+    assert SnapshotStore(tmp_path, on_read=None) is not None
+    assert SnapshotStore(tmp_path, on_read=lambda *_a: None) is not None
+
+
+def test_the_hook_is_keyword_only(tmp_path):
+    # Positional would let a caller pass it by accident, or shuffle it
+    # against a future parameter without the type checker noticing.
+    import pytest
+
+    from neorx.snapshots.reader import SnapshotStore
+
+    with pytest.raises(TypeError):
+        SnapshotStore(tmp_path, None)  # type: ignore[misc]
+
+
+def test_the_store_root_is_one_definition_shared_by_writer_and_readers():
+    """`snapshot build` must write where the experiments read.
+
+    The CLI defaulted `--root` to a cwd-relative "snapshots" while the
+    experiments read an absolute path, so a build run from a subdirectory
+    produced a store nothing would read. That is the write-side half of
+    the defect that let a run cite a manifest describing a different
+    store, and it is closed the same way: one definition, owned by the
+    layer that owns the store.
+    """
+    import typer
+
+    import experiments.corpus_census as cc
+    import experiments.dated_build as db
+    from neorx.experiments.record import SNAPSHOTS_DIR as via_record
+    from neorx.snapshots.__main__ import build_cmd, list_cmd
+    from neorx.snapshots.reader import SNAPSHOTS_DIR
+
+    assert SNAPSHOTS_DIR.is_absolute()
+    assert via_record == SNAPSHOTS_DIR
+    assert db.STORE_ROOT == SNAPSHOTS_DIR
+    assert cc.STORE_ROOT == SNAPSHOTS_DIR
+
+    # And the CLI's own default, not just the constant.
+    for command in (build_cmd, list_cmd):
+        default = command.__defaults__ or ()
+        roots = [d for d in default if isinstance(d, typer.models.OptionInfo)
+                 and d.default == SNAPSHOTS_DIR]
+        assert roots, f"{command.__name__} does not default --root to the store"
+
+
+def test_the_manifest_path_is_taken_from_the_store(tmp_path):
+    # The CLI hand-built `root / "manifest.toml"` in two places, three
+    # lines under a comment about reusing the store so the write and read
+    # locations can never drift apart.
+    from neorx.snapshots.reader import SnapshotStore
+
+    store = SnapshotStore(tmp_path, on_read=None)
+    assert store.manifest_path == tmp_path / "manifest.toml"

@@ -16,6 +16,7 @@ another's manifest, and a run over 18.06 completed while citing only a
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import polars as pl
 
@@ -279,3 +280,25 @@ def test_a_matching_digest_is_cited(tmp_path):
     assert record.settle_snapshot_citations() == []
     assert set(_env(record)["snapshots"]) == {"opentargets/18.06"}
     assert _env(record)["snapshots_mismatched"] == []
+
+
+def test_one_store_under_two_spellings_is_one_store(tmp_path, monkeypatch):
+    """A relative path and its absolute form are the same store.
+
+    The two-store refusal compared unresolved paths, so reaching one
+    physical store both ways looked like reading a release from two
+    different stores and was refused. Safe direction, but wrong.
+    """
+    import os
+
+    root = _store_root(tmp_path, [OT_ENTRY])
+    record = RunRecord.create("census", runs_dir=tmp_path / "runs")
+
+    record.snapshot_store(root).associations("18.06")
+    monkeypatch.chdir(root.parent)
+    # Same store, spelled relatively this time.
+    record.snapshot_store(Path(os.path.relpath(root, root.parent))).associations(
+        "18.06"
+    )
+
+    assert record.snapshot_reads == [("opentargets", "18.06")]

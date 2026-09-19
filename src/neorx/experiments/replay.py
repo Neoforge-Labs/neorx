@@ -66,12 +66,25 @@ def replay_experiment(run_id: str, *, runs_dir: Path | None = None) -> ReplayRes
     replay_rec = RunRecord.create(f"{defn.name}-replay", runs_dir=runs_dir)
 
     has_cassette = cassette_path(original).exists()
-    if defn.captures_http and has_cassette:
-        shutil.copy2(cassette_path(original), cassette_path(replay_rec))
-        with capture(replay_rec, mode="replay"):
+    try:
+        if defn.captures_http and has_cassette:
+            shutil.copy2(cassette_path(original), cassette_path(replay_rec))
+            with capture(replay_rec, mode="replay"):
+                defn.fn(replay_rec)
+        else:
             defn.fn(replay_rec)
-    else:
-        defn.fn(replay_rec)
+    except BaseException:
+        # A raising replay left no settlement and no record.json at all,
+        # so the attempt was invisible: `RunRecord.load` reported it as
+        # merely incomplete. The runner has always done this; replay had
+        # not, and the two drifting apart is what this module keeps
+        # having to fix.
+        try:
+            replay_rec.settle_snapshot_citations()
+        except Exception as settlement_error:
+            replay_rec.note_settlement_failure(settlement_error)
+        replay_rec.finalise("failed")
+        raise
     # The same settlement run_experiment makes, by the same function. A
     # replay that cannot name its extracts and still reports
     # `identical: True` is worse than a run that cannot: it asserts

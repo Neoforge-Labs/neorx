@@ -53,7 +53,7 @@ def _store(tmp_path):
         },
         schema=INTERACTION_COLUMNS,
     ).write_parquet(inter / "interactions.parquet")
-    return SnapshotStore(snap)
+    return SnapshotStore(snap, on_read=None)
 
 
 def _stub_live(monkeypatch, nodes=()):
@@ -553,3 +553,37 @@ def test_a_settlement_fault_does_not_cost_the_run_record(tmp_path, monkeypatch):
     env = json.loads((run_dir / "env.json").read_text())
     # And the settlement fault is recorded rather than lost.
     assert "snapshots_settlement_error" in env
+
+
+def test_an_id_with_only_non_genetic_evidence_is_not_selected():
+    """Presence is measured where the build actually draws from.
+
+    `candidate_frame` and `open_targets_from_snapshot` both filter to
+    GENETIC_DATATYPES, so an id carrying only literature or known-drug
+    rows contributes no frame. Selecting it would produce an empty graph
+    that reads as "this release recorded nothing" rather than "this is the
+    wrong id" -- and a deprecated key lingering with non-genetic rows
+    would trip the ambiguity refusal against the live one.
+    """
+    from experiments.dated_build import UnknownDiseaseForRelease, resolve_disease_id
+
+    associations = pl.DataFrame(
+        {
+            "target_id": ["E1", "E2"],
+            "target_symbol": ["A", "B"],
+            # The deprecated key lingers, but only with literature rows.
+            "disease_id": ["EFO_0000764", "MONDO_0005109"],
+            "datatype": ["literature", "genetic_association"],
+            "score": [0.9, 0.5],
+        },
+        schema=ASSOCIATION_COLUMNS,
+    )
+    resolved = resolve_disease_id(
+        associations, "HIV infection", ("MONDO_0005109", "EFO_0000764"), "25.06"
+    )
+    assert resolved == "MONDO_0005109"
+
+    # And an id with nothing genetic at all is refused, not returned.
+    with pytest.raises(UnknownDiseaseForRelease) as excinfo:
+        resolve_disease_id(associations, "HIV infection", ("EFO_0000764",), "25.06")
+    assert "genetic evidence" in str(excinfo.value)

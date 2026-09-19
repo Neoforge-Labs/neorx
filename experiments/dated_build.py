@@ -42,6 +42,7 @@ from neorx.experiments.registry import experiment
 from neorx.snapshots.reader import SnapshotStore
 from neorx.snapshots.releases import TIME_POINTS, release_for
 from neorx.snapshots.resolver import SourceResolver
+from neorx.snapshots.schema import GENETIC_DATATYPES
 
 # The repository's snapshot store, anchored to the repo root rather than
 # the cwd. A relative path let a run launched from a subdirectory read one
@@ -118,17 +119,29 @@ def resolve_disease_id(
     configuration, and more than one present cannot be resolved here
     because either could be the disease meant.
     """
+    # Presence measured on the GENETIC rows, because that is the
+    # population the build actually draws from -- `candidate_frame` and
+    # `open_targets_from_snapshot` both filter to GENETIC_DATATYPES. An id
+    # present only with literature or known-drug evidence contributes no
+    # frame, so selecting it would produce an empty graph that reads as
+    # "this release recorded nothing" rather than "this is the wrong id",
+    # and a deprecated key lingering with non-genetic rows would trip the
+    # ambiguity refusal against the live one.
+    genetic = associations.filter(
+        pl.col("datatype").is_in(list(GENETIC_DATATYPES)) & (pl.col("score") > 0.0)
+    )
     present = [
         c for c in candidates
-        if associations.filter(pl.col("disease_id") == c).height > 0
+        if genetic.filter(pl.col("disease_id") == c).height > 0
     ]
     if len(present) == 1:
         return present[0]
     if not present:
         raise UnknownDiseaseForRelease(
             f"none of {list(candidates)} appears in the OpenTargets "
-            f"{release} extract, so a build for {disease!r} would record "
-            f"zeros indistinguishable from an absence of evidence. Take the "
+            f"{release} extract with genetic evidence, so a build for "
+            f"{disease!r} would record zeros indistinguishable from an "
+            f"absence of evidence. Take the "
             f"id this release uses from its corpus-census row, which lists "
             f"the disease ids the extract carries."
         )

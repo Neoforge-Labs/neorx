@@ -125,7 +125,7 @@ def test_a_dated_build_refuses_when_the_snapshot_is_missing(tmp_path):
     from neorx.snapshots.resolver import SourceResolver, UnpinnedSourceError
 
     resolver = SourceResolver(
-        store=SnapshotStore(tmp_path),
+        store=SnapshotStore(tmp_path, on_read=None),
         release_for=lambda source, as_of: RELEASE,
         live={},
     )
@@ -213,7 +213,7 @@ def _make_resolver(root):
 
     _write_snapshot(root)
     return SourceResolver(
-        store=SnapshotStore(root),
+        store=SnapshotStore(root, on_read=None),
         release_for=lambda source, as_of: RELEASE,
         live={},
     )

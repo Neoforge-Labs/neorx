@@ -225,3 +225,26 @@ def test_replaying_an_experiment_that_reads_no_snapshots_is_unaffected(
 
     result = _replay_with(tmp_path, monkeypatch, _definition(fn, reads_snapshots=False))
     assert result.identical
+
+
+def test_a_replay_that_raises_still_leaves_a_record(tmp_path, monkeypatch):
+    """A failing replay was invisible.
+
+    Without a failure path it left no settlement and no record.json, so
+    `RunRecord.load` reported the attempt as merely incomplete. The runner
+    had always finalised; replay had not, and these two drifting apart is
+    the fault this module keeps having to repair.
+    """
+    import json
+
+    def fn(rec):
+        rec.append_row({"n": 1})
+        raise RuntimeError("replay blew up")
+
+    with pytest.raises(RuntimeError, match="replay blew up"):
+        _replay_with(tmp_path, monkeypatch, _definition(fn, reads_snapshots=False))
+
+    replays = [d for d in (tmp_path / "runs").iterdir() if "replay" in d.name]
+    assert replays, "no replay record was written"
+    summary = json.loads((replays[0] / "record.json").read_text())
+    assert summary["status"] == "failed"

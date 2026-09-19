@@ -79,7 +79,7 @@ def _store_with_an_extract(root):
         schema=INTERACTION_COLUMNS,
     ).write_parquet(op / "interactions.parquet")
 
-    return SnapshotStore(root)
+    return SnapshotStore(root, on_read=None)
 
 
 def _snapshot_resolver(root):
