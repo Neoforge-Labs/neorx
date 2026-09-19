@@ -17,9 +17,39 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-import vcr
-
 from neorx.experiments.record import RunRecord
+
+
+class RecorderUnavailableError(RuntimeError):
+    """vcrpy is not installed, so HTTP cannot be frozen or replayed."""
+
+
+def _vcr():
+    """Import vcrpy at the point of use, not at import time.
+
+    vcrpy is a development dependency: it exists to freeze an experiment's
+    HTTP inputs, which only a recording or replaying run does. Importing
+    it at module level made it a runtime dependency of the whole CLI --
+    `neorx.cli` imports the experiments app, which imports the registry,
+    which imports this module -- so every command failed on a clean
+    install with `ModuleNotFoundError: No module named 'vcr'`. The nightly
+    end-to-end job caught it and reported it as "likely an upstream API
+    change", which sent the diagnosis in the wrong direction.
+
+    Raising here rather than degrading: a run that asked for its inputs to
+    be frozen and silently did not freeze them is unreplayable and does
+    not say so.
+    """
+    try:
+        import vcr
+    except ModuleNotFoundError as exc:  # pragma: no cover - exercised by test
+        raise RecorderUnavailableError(
+            "recording or replaying an experiment's HTTP needs vcrpy, which "
+            "is a development dependency. Install it with "
+            "`uv sync --group dev`. Experiments that do not capture HTTP "
+            "run without it."
+        ) from exc
+    return vcr
 
 
 class NoInteractionsRecordedError(RuntimeError):
@@ -68,7 +98,7 @@ def capture(record: RunRecord, *, mode: str = "record") -> Iterator[None]:
             f"Its inputs may have been pruned."
         )
 
-    config = vcr.VCR(
+    config = _vcr().VCR(
         record_mode="all" if mode == "record" else "none",
         match_on=["method", "scheme", "host", "port", "path", "query"],
         decode_compressed_response=True,

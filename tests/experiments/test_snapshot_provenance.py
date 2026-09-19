@@ -15,11 +15,12 @@ another's manifest, and a run over 18.06 completed while citing only a
 """
 
 import json
+from dataclasses import replace
 
 import polars as pl
 
 from neorx.experiments.record import RunRecord
-from neorx.snapshots.manifest import SnapshotEntry, write_entry
+from neorx.snapshots.manifest import SnapshotEntry, digest_file, write_entry
 from neorx.snapshots.schema import ASSOCIATION_COLUMNS, INTERACTION_COLUMNS
 
 OT_ENTRY = SnapshotEntry(
@@ -53,8 +54,17 @@ UNREAD_ENTRY = SnapshotEntry(
 )
 
 
+_FILES = {"opentargets": "associations.parquet", "omnipath": "interactions.parquet"}
+
+
 def _store_root(tmp_path, entries):
-    """A real store: extracts on disk, and a manifest describing `entries`."""
+    """A real store: extracts on disk, and a manifest describing `entries`.
+
+    Each entry's digest is taken from the extract actually written, because
+    a citation is now checked against the bytes the run read. An entry
+    whose extract does not exist keeps its literal digest -- it describes
+    something this store does not hold, which is the point of those cases.
+    """
     root = tmp_path / "snapshots"
     ot = root / "opentargets" / "18.06"
     ot.mkdir(parents=True)
@@ -63,8 +73,15 @@ def _store_root(tmp_path, entries):
     omni.mkdir(parents=True)
     pl.DataFrame(schema=INTERACTION_COLUMNS).write_parquet(omni / "interactions.parquet")
     for entry in entries:
+        extract = root / entry.source / entry.release / _FILES[entry.source]
+        if extract.exists():
+            entry = replace(entry, sha256=digest_file(extract))
         write_entry(root / "manifest.toml", entry)
     return root
+
+
+def _digest_of(root, source, release):
+    return digest_file(root / source / release / _FILES[source])
 
 
 def _env(record):
@@ -106,7 +123,7 @@ def test_env_records_every_field_of_the_entry(tmp_path):
 
     assert _env(record)["snapshots"]["opentargets/18.06"] == {
         "url": "https://example.invalid/18.06",
-        "sha256": "b" * 64,
+        "sha256": _digest_of(root, "opentargets", "18.06"),
         "extractor_version": 1,
         "rows": 42,
         "synthesised_consensus": False,
@@ -125,7 +142,7 @@ def test_a_synthesised_consensus_survives_into_the_run_record(tmp_path):
 
     assert _env(record)["snapshots"]["omnipath/20180614"] == {
         "url": "https://example.invalid/omnipath-20180614",
-        "sha256": "c" * 64,
+        "sha256": _digest_of(root, "omnipath", "20180614"),
         "extractor_version": 2,
         "rows": 7,
         "synthesised_consensus": True,
@@ -182,7 +199,10 @@ def test_the_cited_manifest_is_the_read_stores_own(tmp_path):
     record = RunRecord.create("census", runs_dir=tmp_path / "runs")
     record.snapshot_store(second).associations("18.06")
     record.settle_snapshot_citations()
-    assert _env(record)["snapshots"]["opentargets/18.06"]["sha256"] == "e" * 64
+    # The second store's own bytes, not the first store's entry.
+    assert _env(record)["snapshots"]["opentargets/18.06"]["url"] == (
+        "https://example.invalid/other"
+    )
 
 
 def test_reading_one_release_from_two_stores_is_refused(tmp_path):
@@ -198,3 +218,64 @@ def test_reading_one_release_from_two_stores_is_refused(tmp_path):
     record.snapshot_store(first).associations("18.06")
     with pytest.raises(ProvenanceError):
         record.snapshot_store(second).associations("18.06")
+
+
+# ── The bytes, not just the manifest ────────────────────────────────
+
+
+def test_a_manifest_describing_different_bytes_is_refused(tmp_path):
+    """`snapshot build` writes the extract and its entry as two steps.
+
+    An interrupted rebuild of an already-built release leaves the manifest
+    describing the old file and the disk holding the new one. Nothing
+    checked the two matched, so a run cited a digest of bytes it never
+    read -- the defect this layer exists to prevent, arriving through the
+    one door still open.
+    """
+    root = _store_root(tmp_path, [])
+    # Written by hand so the digest is deliberately not the file's.
+    write_entry(root / "manifest.toml", OT_ENTRY)  # sha256 is "b" * 64
+    record = RunRecord.create("census", runs_dir=tmp_path / "runs")
+    record.snapshot_store(root).associations("18.06")
+
+    problems = record.settle_snapshot_citations()
+    assert problems == ["opentargets/18.06 (digest mismatch)"]
+
+    env = _env(record)
+    assert env["snapshots"] == {}
+    (mismatch,) = env["snapshots_mismatched"]
+    assert mismatch["extract"] == "opentargets/18.06"
+    assert mismatch["manifest_sha256"] == "b" * 64
+    # And it says what was actually there, so the operator can tell a
+    # stale manifest from a corrupted extract.
+    assert mismatch["actual_sha256"] != "b" * 64
+    assert len(mismatch["actual_sha256"]) == 64
+
+
+def test_a_matching_digest_is_cited(tmp_path):
+    """The check must not refuse a correct store.
+
+    The digest is taken over the extract on disk, so the entry is written
+    from that same file rather than from a literal.
+    """
+    from neorx.snapshots.manifest import SnapshotEntry, digest_file, write_entry
+
+    root = _store_root(tmp_path, [])
+    extract = root / "opentargets" / "18.06" / "associations.parquet"
+    write_entry(
+        root / "manifest.toml",
+        SnapshotEntry(
+            source="opentargets",
+            release="18.06",
+            url="https://example.invalid/18.06",
+            sha256=digest_file(extract),
+            extractor_version=2,
+            rows=0,
+        ),
+    )
+    record = RunRecord.create("census", runs_dir=tmp_path / "runs")
+    record.snapshot_store(root).associations("18.06")
+
+    assert record.settle_snapshot_citations() == []
+    assert set(_env(record)["snapshots"]) == {"opentargets/18.06"}
+    assert _env(record)["snapshots_mismatched"] == []

@@ -205,14 +205,28 @@ def test_the_experiment_declares_that_it_reads_snapshots(tmp_path):
 # is the recurring pattern on this branch, so they are pinned directly.
 
 
-def _entry(source, release, digest):
-    from neorx.snapshots.manifest import SnapshotEntry
+_FILES = {"opentargets": "associations.parquet", "omnipath": "interactions.parquet"}
 
+
+def _entry(source, release, digest, store=None):
+    """A manifest entry.
+
+    When the store holds the extract, the digest is taken from those bytes:
+    a citation is checked against what the run actually read, so a literal
+    stands in only for an extract this store does not have.
+    """
+    from neorx.snapshots.manifest import SnapshotEntry, digest_file
+
+    sha = digest * 64
+    if store is not None:
+        path = store.root / source / release / _FILES[source]
+        if path.exists():
+            sha = digest_file(path)
     return SnapshotEntry(
         source=source,
         release=release,
         url=f"https://example.invalid/{source}/{release}",
-        sha256=digest * 64,
+        sha256=sha,
         extractor_version=2,
         rows=2,
     )
@@ -242,9 +256,9 @@ def test_running_the_experiment_cites_exactly_what_it_read(tmp_path, monkeypatch
 
     store = _store(tmp_path)
     for entry in (
-        _entry("opentargets", "18.06", "a"),
-        _entry("omnipath", "20180614-20181114", "b"),
-        _entry("opentargets", "25.06", "c"),
+        _entry("opentargets", "18.06", "a", store),
+        _entry("omnipath", "20180614-20181114", "b", store),
+        _entry("opentargets", "25.06", "c", store),
     ):
         write_entry(store.manifest_path, entry)
 
@@ -254,7 +268,11 @@ def test_running_the_experiment_cites_exactly_what_it_read(tmp_path, monkeypatch
         "opentargets/18.06",
         "omnipath/20180614-20181114",
     }
-    assert env["snapshots"]["opentargets/18.06"]["sha256"] == "a" * 64
+    from neorx.snapshots.manifest import digest_file
+
+    assert env["snapshots"]["opentargets/18.06"]["sha256"] == digest_file(
+        store.root / "opentargets" / "18.06" / "associations.parquet"
+    )
 
 
 def test_a_run_whose_extracts_have_no_manifest_is_refused(tmp_path, monkeypatch):
@@ -284,7 +302,7 @@ def test_an_unrelated_manifest_entry_does_not_satisfy_the_citation(
     from neorx.snapshots.manifest import write_entry
 
     store = _store(tmp_path)
-    write_entry(store.manifest_path, _entry("opentargets", "25.06", "c"))
+    write_entry(store.manifest_path, _entry("opentargets", "25.06", "c", store))
     with pytest.raises(ProvenanceError):
         _run_dated(tmp_path, monkeypatch, store)
 
@@ -296,7 +314,7 @@ def test_a_partly_described_store_is_refused(tmp_path, monkeypatch):
     from neorx.snapshots.manifest import write_entry
 
     store = _store(tmp_path)
-    write_entry(store.manifest_path, _entry("opentargets", "18.06", "a"))
+    write_entry(store.manifest_path, _entry("opentargets", "18.06", "a", store))
     with pytest.raises(ProvenanceError) as excinfo:
         _run_dated(tmp_path, monkeypatch, store)
     assert "omnipath/20180614-20181114" in str(excinfo.value)
@@ -460,3 +478,78 @@ def test_the_snapshot_store_is_anchored_to_the_repository_not_the_cwd():
     assert repo_root / "snapshots" == SNAPSHOTS_DIR
     assert db.STORE_ROOT == SNAPSHOTS_DIR
     assert cc.STORE_ROOT == SNAPSHOTS_DIR
+
+
+def test_a_run_that_fails_midway_still_cites_what_it_read(tmp_path, monkeypatch):
+    """Partial rows need their provenance as much as complete ones.
+
+    Deleting the settlement call from the runner's failure path left the
+    whole suite green: a failed run kept its partial rows with
+    `"snapshots": {}` and no record of what produced them.
+    """
+    import json
+
+    import experiments.dated_build as db
+    from neorx.experiments.registry import experiment, run_experiment
+    from neorx.snapshots.manifest import SnapshotEntry, digest_file, write_entry
+
+    store = _store(tmp_path)
+    extract = store.root / "opentargets" / "18.06" / "associations.parquet"
+    write_entry(
+        store.manifest_path,
+        SnapshotEntry(
+            source="opentargets",
+            release="18.06",
+            url="https://example.invalid/18.06",
+            sha256=digest_file(extract),
+            extractor_version=2,
+            rows=2,
+        ),
+    )
+    monkeypatch.setattr(db, "STORE_ROOT", store.root)
+
+    @experiment(name="reads-then-raises", reads_snapshots=True)
+    def _reads_then_raises(record):
+        rows = record.snapshot_store(store.root).associations("18.06").height
+        record.append_row({"n": rows})
+        raise RuntimeError("upstream blew up")
+
+    with pytest.raises(RuntimeError, match="upstream blew up"):
+        run_experiment("reads-then-raises", runs_dir=tmp_path / "runs")
+
+    (run_dir,) = (tmp_path / "runs").iterdir()
+    env = json.loads((run_dir / "env.json").read_text())
+    assert set(env["snapshots"]) == {"opentargets/18.06"}
+    summary = json.loads((run_dir / "record.json").read_text())
+    assert summary["status"] == "failed"
+
+
+def test_a_settlement_fault_does_not_cost_the_run_record(tmp_path, monkeypatch):
+    """A second fault must not hide the first.
+
+    Without this, a malformed manifest.toml raised inside the failure path,
+    finalise() never ran, no record.json was written, and a failed run read
+    back later as merely incomplete -- while the operator saw the manifest
+    error instead of the one that stopped the run.
+    """
+    import json
+
+    from neorx.experiments.registry import experiment, run_experiment
+
+    store = _store(tmp_path)
+    store.manifest_path.write_text("this is not valid toml {{{", encoding="utf-8")
+
+    @experiment(name="raises-with-bad-manifest", reads_snapshots=True)
+    def _raises(record):
+        record.snapshot_store(store.root).associations("18.06")
+        raise RuntimeError("the real failure")
+
+    with pytest.raises(RuntimeError, match="the real failure"):
+        run_experiment("raises-with-bad-manifest", runs_dir=tmp_path / "runs")
+
+    (run_dir,) = (tmp_path / "runs").iterdir()
+    summary = json.loads((run_dir / "record.json").read_text())
+    assert summary["status"] == "failed"
+    env = json.loads((run_dir / "env.json").read_text())
+    # And the settlement fault is recorded rather than lost.
+    assert "snapshots_settlement_error" in env

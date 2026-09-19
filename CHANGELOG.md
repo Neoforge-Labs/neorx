@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-09-19
+
+A packaging fix. 0.3.0's command line could not start on a clean install,
+so every `neorx` command failed for anyone who installed it from PyPI.
+
+### Fixed
+
+- **`neorx` failed on a clean install with `ModuleNotFoundError: No module
+  named 'vcr'`.** `neorx.cli` imports the experiments app, which imports the
+  run registry, which imported `neorx.experiments.capture`, which imported
+  vcrpy at module level. vcrpy is declared only in the development group, so
+  the import chain broke for every user of the published wheel. vcrpy is now
+  imported at the point of use -- recording or replaying an experiment's HTTP
+  -- and raises `RecorderUnavailableError` naming the command that installs
+  it. A run that asked for its inputs to be frozen and silently did not
+  freeze them would be unreplayable without saying so, so this refuses rather
+  than degrading.
+
+### Changed
+
+- The release pipeline now runs the installed console script. It imported the
+  library packages and never `neorx.cli`, which is how a wheel with an
+  unusable command line passed every check.
+- The nightly end-to-end job can open the issue it is supposed to open. It
+  lacked `issues: write`, so it 403'd on reporting its own failure; the fault
+  above sat unreported for four days behind that. Its alert also asserted
+  "Likely an upstream API change", which was wrong here and sent the
+  diagnosis in the wrong direction -- it now points at the log and says what
+  the job does and does not install.
+
 ## [0.3.0] — 2026-09-05
 
 This release exists because 0.2.0 reported numbers that no data supported.

@@ -87,6 +87,18 @@ jobs:
               print(f"{name}: {len(mod.__all__)} names OK")
           PY
 
+      # The console script, from a clean install. Importing the library
+      # packages above did NOT cover this: `neorx.cli` pulls in the
+      # experiments app, and 0.3.0 shipped with that chain importing vcrpy,
+      # a development-only dependency -- so every command failed on a user's
+      # machine while this job stayed green.
+      - name: Run the installed CLI
+        working-directory: ${{ runner.temp }}
+        run: |
+          neorx --help > /dev/null
+          neorx exp list > /dev/null
+          python -c "import neorx.cli; print('neorx.cli imports OK')"
+
       - name: Generate real molecules from the shipped weights
         working-directory: ${{ runner.temp }}
         run: |

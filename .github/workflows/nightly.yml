@@ -7,6 +7,15 @@ on:
 
 # These steps query eight external databases that drift and rate-limit.
 # They must never gate a merge; a failure opens an issue instead.
+#
+# The issue-opening step needs `issues: write`. Without it the default
+# token is read-only, the step 403s, and the job fails twice over while
+# reporting nothing -- which is how a real failure here went unread for
+# days.
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   end-to-end:
     runs-on: ubuntu-latest
@@ -15,7 +24,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e .
+      # Runtime dependencies only, deliberately. Installing the dev group
+      # here would hide exactly the class of defect this job exists to
+      # catch: a module that the CLI imports at runtime but that is
+      # declared only for development.
+      - run: pip install uv && uv pip install --system -e .
       - name: Full pipeline against live APIs
         run: neorx run HIV --top-n 5
       - name: Open an issue on failure
@@ -27,6 +40,6 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: `Nightly end-to-end failed (${new Date().toISOString().slice(0,10)})`,
-              body: `\`neorx run HIV\` failed. Likely an upstream API change.\n\n${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              body: `\`neorx run HIV\` failed. The cause is in the run log -- this job installs runtime dependencies only, so a packaging fault looks the same here as an upstream change until you read it.\n\n${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               labels: ['nightly-failure'],
             })

@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from neorx.snapshots.manifest import read_manifest
+from neorx.snapshots.manifest import digest_file, read_manifest
 from neorx.snapshots.reader import SnapshotStore
 
 RUNS_DIR = Path(__file__).resolve().parents[3] / "runs"
@@ -99,8 +99,8 @@ class RunRecord:
         # falls back to run_id via getattr for the latter).
         self._started: datetime | None = None
         self._experiment: str | None = None
-        # (source, release) -> the manifest that describes the extract read.
-        self._snapshot_reads: dict[tuple[str, str], Path] = {}
+        # (source, release) -> (manifest describing it, extract actually read)
+        self._snapshot_reads: dict[tuple[str, str], tuple[Path, Path]] = {}
 
     # -- construction --------------------------------------------------
 
@@ -164,17 +164,17 @@ class RunRecord:
         """
         manifest = SnapshotStore(root).manifest_path
 
-        def note(source: str, release: str) -> None:
+        def note(source: str, release: str, path: Path) -> None:
             key = (source, release)
             seen = self._snapshot_reads.get(key)
-            if seen is not None and seen != manifest:
+            if seen is not None and seen[0] != manifest:
                 raise ProvenanceError(
                     f"{source}/{release} was read from two stores in one run "
-                    f"({seen.parent} and {manifest.parent}); a citation keyed "
-                    f"by source and release cannot say which produced the "
-                    f"numbers."
+                    f"({seen[0].parent} and {manifest.parent}); a citation "
+                    f"keyed by source and release cannot say which produced "
+                    f"the numbers."
                 )
-            self._snapshot_reads[key] = manifest
+            self._snapshot_reads[key] = (manifest, path)
 
         return SnapshotStore(root, on_read=note)
 
@@ -204,12 +204,33 @@ class RunRecord:
         manifests: dict[Path, dict] = {}
         cited: dict[str, dict[str, Any]] = {}
         uncited: list[str] = []
-        for (source, release), manifest in sorted(self._snapshot_reads.items()):
+        mismatched: list[dict[str, str]] = []
+        for (source, release), (manifest, path) in sorted(
+            self._snapshot_reads.items()
+        ):
             if manifest not in manifests:
                 manifests[manifest] = read_manifest(manifest)
             entry = manifests[manifest].get((source, release))
             if entry is None:
                 uncited.append(f"{source}/{release}")
+                continue
+            # The manifest describes bytes; this run read bytes. Until now
+            # nothing checked they were the same bytes. `snapshot build`
+            # writes the extract and its manifest entry as two steps, so an
+            # interrupted rebuild of an already-built release leaves the
+            # manifest describing the old file and the disk holding the new
+            # -- and the run would cite a digest of bytes it never read,
+            # which is the defect this whole layer exists to prevent.
+            actual = digest_file(path)
+            if actual != entry.sha256:
+                mismatched.append(
+                    {
+                        "extract": f"{source}/{release}",
+                        "path": str(path),
+                        "manifest_sha256": entry.sha256,
+                        "actual_sha256": actual,
+                    }
+                )
                 continue
             fields = asdict(entry)
             del fields["source"], fields["release"]
@@ -219,8 +240,21 @@ class RunRecord:
         env = json.loads(env_path.read_text(encoding="utf-8"))
         env["snapshots"] = cited
         env["snapshots_uncited"] = uncited
+        env["snapshots_mismatched"] = mismatched
         env_path.write_text(json.dumps(env, indent=2), encoding="utf-8")
-        return uncited
+        return uncited + [f"{m['extract']} (digest mismatch)" for m in mismatched]
+
+    def note_settlement_failure(self, error: BaseException) -> None:
+        """Record that citations could not be settled, and why.
+
+        Only reached when the run was already failing. Losing the record
+        to a second fault would leave the operator reading the manifest
+        error instead of the one that stopped the run.
+        """
+        env_path = self.path / "env.json"
+        env = json.loads(env_path.read_text(encoding="utf-8"))
+        env["snapshots_settlement_error"] = f"{type(error).__name__}: {error}"
+        env_path.write_text(json.dumps(env, indent=2), encoding="utf-8")
 
     @classmethod
     def load(cls, run_id: str, *, runs_dir: Path | None = None) -> RunRecord:

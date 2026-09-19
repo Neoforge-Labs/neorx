@@ -43,9 +43,9 @@ class SnapshotStore:
     def __init__(
         self,
         root: Path,
-        on_read: Callable[[str, str], None] | None = None,
+        on_read: Callable[[str, str, Path], None] | None = None,
     ) -> None:
-        """``on_read(source, release)`` is called after every extract read.
+        """``on_read(source, release, path)`` runs after every extract read.
 
         It is how a run record learns what a run actually read, so it can
         cite exactly that -- from this store's own manifest, rather than
@@ -83,7 +83,9 @@ class SnapshotStore:
             )
         frame = pl.read_parquet(path)
         if self._on_read is not None:
-            self._on_read(source, release)
+            # The path too: a citation has to be checked against the bytes
+            # that were actually read, not just against the manifest.
+            self._on_read(source, release, path)
         return frame
 
     def associations(self, release: str) -> pl.DataFrame:

@@ -157,7 +157,18 @@ def run_experiment(
         # Cite what was read before the failure. The original error is the
         # one that propagates; the record still says what the partial rows
         # came from, and lists any read it could not cite.
-        record.settle_snapshot_citations()
+        #
+        # Settlement itself can fail -- a malformed manifest.toml, or an
+        # entry carrying a field this version does not know. That must not
+        # cost the run record: without finalise() there is no record.json
+        # at all, and RunRecord.load would later report a failed run as
+        # merely incomplete while the operator saw the manifest error
+        # instead of the one that actually stopped the run. So the
+        # settlement error is recorded and the original is re-raised.
+        try:
+            record.settle_snapshot_citations()
+        except Exception as settlement_error:
+            record.note_settlement_failure(settlement_error)
         record.finalise("failed")
         raise
     settle_or_refuse(record, name, declared=defn.reads_snapshots)
