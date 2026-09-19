@@ -206,9 +206,7 @@ class RunRecord:
         cited: dict[str, dict[str, Any]] = {}
         uncited: list[str] = []
         mismatched: list[dict[str, str]] = []
-        for (source, release), (manifest, path) in sorted(
-            self._snapshot_reads.items()
-        ):
+        for (source, release), (manifest, path) in sorted(self._snapshot_reads.items()):
             if manifest not in manifests:
                 manifests[manifest] = read_manifest(manifest)
             entry = manifests[manifest].get((source, release))
