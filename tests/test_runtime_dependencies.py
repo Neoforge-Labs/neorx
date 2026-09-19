@@ -102,3 +102,73 @@ def test_vcrpy_is_still_used_when_present():
     from neorx.experiments.capture import _vcr
 
     assert _vcr() is vcr
+
+
+def test_exp_commands_explain_themselves_without_the_repository():
+    """`neorx exp list` crashed on a clean install.
+
+    `src/neorx/experiments/__main__.py` imports the repository's top-level
+    `experiments/` package, which the wheel deliberately does not ship, so
+    an installed user got `ModuleNotFoundError: No module named
+    'experiments'` and a traceback. Listing zero experiments would be
+    worse than refusing: an empty list looks like an answer, and the real
+    answer is that the definitions live somewhere this installation
+    cannot see.
+
+    Caught by the release pipeline's new CLI smoke step within minutes of
+    it being added.
+    """
+    import typer
+
+    from neorx.experiments.__main__ import _register_definitions
+
+    class Block(MetaPathFinder):
+        def find_spec(self, name, path=None, target=None):
+            if name == "experiments":
+                raise ModuleNotFoundError(
+                    "No module named 'experiments'", name="experiments"
+                )
+            return None
+
+    blocker = Block()
+    sys.meta_path.insert(0, blocker)
+    saved = sys.modules.pop("experiments", None)
+    try:
+        with pytest.raises(typer.BadParameter) as excinfo:
+            _register_definitions()
+        message = str(excinfo.value)
+        assert "experiments/" in message
+        assert "repository" in message
+    finally:
+        sys.meta_path.remove(blocker)
+        if saved is not None:
+            sys.modules["experiments"] = saved
+
+
+def test_a_different_missing_module_is_not_disguised():
+    """Only the definitions package gets that message.
+
+    If some other import inside `experiments/` is missing, reporting it as
+    "definitions are unavailable" would send the reader somewhere useless.
+    """
+    from neorx.experiments.__main__ import _register_definitions
+
+    class Block(MetaPathFinder):
+        def find_spec(self, name, path=None, target=None):
+            if name == "experiments":
+                raise ModuleNotFoundError(
+                    "No module named 'somethingelse'", name="somethingelse"
+                )
+            return None
+
+    blocker = Block()
+    sys.meta_path.insert(0, blocker)
+    saved = sys.modules.pop("experiments", None)
+    try:
+        with pytest.raises(ModuleNotFoundError) as excinfo:
+            _register_definitions()
+        assert excinfo.value.name == "somethingelse"
+    finally:
+        sys.meta_path.remove(blocker)
+        if saved is not None:
+            sys.modules["experiments"] = saved

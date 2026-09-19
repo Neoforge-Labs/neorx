@@ -14,10 +14,38 @@ app = typer.Typer(
 )
 
 
+def _register_definitions() -> None:
+    """Import this repository's experiment definitions.
+
+    The `experiments` package is the repository's own -- its docstring says
+    so -- and is deliberately not part of the installed wheel: these are
+    this project's experiments, not a library feature. So on a clean
+    install the import fails, and it failed with a bare traceback and
+    `ModuleNotFoundError: No module named 'experiments'`, which tells a
+    user nothing about what to do.
+
+    Raising a clear message rather than listing zero experiments: an empty
+    list looks like an answer, and the honest answer is that the
+    definitions live somewhere this installation cannot see.
+    """
+    try:
+        import experiments  # noqa: F401  -- import registers the definitions
+    except ModuleNotFoundError as exc:
+        if exc.name != "experiments":
+            raise
+        raise typer.BadParameter(
+            "no experiment definitions are available. They live in the "
+            "`experiments/` package of the neorx repository, which the "
+            "installed wheel deliberately does not ship. Clone "
+            "https://github.com/Neoforge-Labs/neorx and run `neorx exp` "
+            "from the repository root."
+        ) from exc
+
+
 @app.command("list")
 def list_cmd() -> None:
     """List every registered experiment."""
-    import experiments  # noqa: F401  -- import registers the definitions
+    _register_definitions()
 
     for defn in list_experiments():
         typer.echo(f"{defn.name:22} {defn.help}")
@@ -31,7 +59,7 @@ def run_cmd(
     ),
 ) -> None:
     """Run an experiment and write its record."""
-    import experiments  # noqa: F401
+    _register_definitions()
 
     record = run_experiment(name, allow_large=allow_large)
     typer.echo(f"{record.run_id}  status={record.status}  citable={record.citable}")
@@ -53,7 +81,7 @@ def figure_cmd(
     """Render manuscript figures from a run record."""
     import os
 
-    import experiments  # noqa: F401
+    _register_definitions()
 
     os.environ["NEORX_FIGURE_RUN"] = from_run
     record = run_experiment("figures")
@@ -63,7 +91,7 @@ def figure_cmd(
 @app.command("replay")
 def replay_cmd(run_id: str = typer.Argument(..., help="Run ID to replay.")) -> None:
     """Re-execute a recorded run against its frozen inputs and diff the rows."""
-    import experiments  # noqa: F401
+    _register_definitions()
     from neorx.experiments.replay import replay_experiment
 
     result = replay_experiment(run_id)

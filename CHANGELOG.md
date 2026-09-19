@@ -24,6 +24,13 @@ so every `neorx` command failed for anyone who installed it from PyPI.
   it. A run that asked for its inputs to be frozen and silently did not
   freeze them would be unreplayable without saying so, so this refuses rather
   than degrading.
+- **`neorx exp` commands crashed on a clean install** with
+  `ModuleNotFoundError: No module named 'experiments'` and a traceback. The
+  experiment definitions live in the repository's own `experiments/` package,
+  which the wheel deliberately does not ship. The commands now say that, and
+  where to get them. Listing zero experiments would have been worse: an empty
+  list looks like an answer. Found by the release pipeline's new CLI check
+  within minutes of adding it.
 
 ### Changed
 
