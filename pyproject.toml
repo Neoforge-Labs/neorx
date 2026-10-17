@@ -162,10 +162,41 @@ dev = [
     # runtime requirement of the library.
     "vcrpy>=8.3",
 ]
+docs = [
+    # Floors are the versions this site was built and checked against on
+    # 2026-10-17: `mkdocs build --strict` clean, and the API pages
+    # verified to contain prose pulled from the real docstrings rather
+    # than headings alone. Verified 2026-10-17.
+    "mkdocs-material>=9.7.7",
+    "mkdocstrings[python]>=1.0.7",
+    # A real upper bound, not caution. The Material for MkDocs
+    # maintainers state that MkDocs 2.0 removes the plugin system
+    # entirely, rewrites theming, and offers no migration path -- which
+    # would take out mkdocstrings, the search plugin, and the theme at
+    # once. Revisit when Material itself declares support, never by
+    # widening this blindly.
+    "mkdocs<2",
+]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q --tb=short"
+# `docs` is here because the published examples are executable: every
+# ``>>>`` block under docs/ runs in the ordinary suite, so an example
+# cannot drift from the API it demonstrates without failing. Only docs/
+# is collected for doctests, not src/ -- adding --doctest-modules would
+# turn hundreds of illustrative module docstrings into assertions in one
+# step, which is a separate piece of work.
+#
+# docs/superpowers is excluded because those are archived plans and
+# specs: they record what was planned on a date, including ``>>>`` blocks
+# for APIs that were never built that way. They are history, and a gate
+# that executed them would be asserting the history is still true.
+testpaths = ["tests", "docs"]
+addopts = "-q --tb=short --doctest-glob=*.md --ignore=docs/superpowers"
+# For prose line-wrapping of long dict and list literals, nothing more.
+# ELLIPSIS is deliberately NOT enabled: no example here needs it, and it
+# would turn a literal "..." in an expected output into a wildcard that
+# matches anything -- a doctest that cannot fail is worse than none.
+doctest_optionflags = ["NORMALIZE_WHITESPACE"]
 filterwarnings = [
     "ignore::DeprecationWarning:pkg_resources",
     "ignore::UserWarning:chembl_webresource_client",

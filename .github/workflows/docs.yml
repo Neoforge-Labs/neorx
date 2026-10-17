@@ -1,0 +1,81 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Pages deployment needs these; the build job alone would not.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# A queued deploy should supersede an older one, not race it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # mkdocstrings imports the package to read its docstrings, so the
+      # package itself has to be installed -- not just the docs tools.
+      # That means torch, rdkit and the rest: this job is not cheap, and
+      # there is no shortcut, because an API page built without the
+      # import would be headings with no prose under them.
+      - name: Install the package and the docs group
+        run: uv pip install --system -e . --group docs
+
+      # --strict turns a broken internal link or a page missing from the
+      # nav into a failed build. A docs site that silently loses a page is
+      # worse than one that fails to publish.
+      - name: Build
+        run: mkdocs build --strict
+
+      # The published examples are executable. If the API drifts from what
+      # the docs claim, this fails here rather than misleading a reader.
+      #
+      # docs/ only: the rest of the suite is the CI workflow's job, and
+      # docs/superpowers is excluded because those are archived plans, not
+      # documentation (the --ignore comes from pyproject's addopts).
+      - name: Check the documented examples still run
+        run: |
+          uv pip install --system --group dev
+          python -m pytest docs/ -q --timeout=300
+
+      - name: Confirm the custom domain survived the build
+        run: |
+          test -f site/CNAME || { echo "FAIL: CNAME missing from site/"; exit 1; }
+          echo "CNAME: $(cat site/CNAME)"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/
+
+  deploy:
+    name: Deploy to GitHub Pages
+    # Never publish from a pull request: it would let a fork overwrite the
+    # live site.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

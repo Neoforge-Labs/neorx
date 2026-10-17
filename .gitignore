@@ -74,3 +74,7 @@ checkpoints/
 !runs/
 runs/*
 !runs/.gitkeep
+
+# Built documentation site (mkdocs build output). Published by
+# .github/workflows/docs.yml from a fresh build, never from a commit.
+site/
