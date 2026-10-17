@@ -71,7 +71,7 @@ from neorx.core.graph.dated_frame import match_key
 from neorx.core.graph.graph_builder import disease_graph_to_networkx
 from neorx.core.bio.classifier import TargetClassifier, TargetType, classify_disease
 from neorx.core.bio.tissue_filter import TissueFilter
-from neorx.core.causal.backdoor import find_adjustment_set
+from causalphylo import find_adjustment_set
 from neorx.core.causal.evidence import (
     _estimate_evidence_score,
     _sensitivity_analysis,

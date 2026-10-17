@@ -40,7 +40,7 @@ def _evidence_class_for(datatype_scores: dict[str, float]) -> str:
     Open Targets breaks an association into datatypes. Two of them --
     genetic_association and somatic_mutation -- carry a
     natural-experiment warrant that lets the edge be treated as causal
-    downstream (see neorx.core.causal.graph_semantics). Everything else
+    downstream (see causalphylo.graph_semantics). Everything else
     is association. Genetic association is preferred over somatic
     mutation when both are present, being the stronger warrant: germline
     variants are randomised at conception, somatic ones are not.

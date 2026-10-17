@@ -129,7 +129,7 @@ class GraphEdge(BaseModel):
             "What kind of evidence backs this edge: genetic_association, "
             "somatic_mutation, literature, regulatory, or empty if unclassified. "
             "Causal admissibility is derived from this plus edge_type -- see "
-            "neorx.core.causal.graph_semantics."
+            "causalphylo.graph_semantics."
         ),
     )
     sign: int = Field(
@@ -256,7 +256,7 @@ class NeoRxResult(BaseModel):
         "",
         description=(
             "Why identification succeeded or failed -- an "
-            "IdentificationReason value. See neorx.core.causal.backdoor."
+            "IdentificationReason value. See causalphylo.backdoor."
         ),
     )
     adjustment_set: list[str] = Field(

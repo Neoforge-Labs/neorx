@@ -210,7 +210,7 @@ def test_every_row_carries_the_full_schema(tmp_path, monkeypatch):
 # leads with, and the failure breakdown is what makes a low rate legible
 # rather than a bare zero. Both have to reach the run record.
 
-from neorx.core.causal.backdoor import IdentificationReason
+from causalphylo import IdentificationReason
 
 
 def test_identifiability_summary_counts_every_candidate():

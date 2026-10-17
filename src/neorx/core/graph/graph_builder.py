@@ -645,7 +645,7 @@ def _resolve_edge_collisions(
     So the rule is explicit and order-independent:
 
     1. A causal-admissible edge always beats an associational one
-       (see :mod:`neorx.core.causal.graph_semantics`). Admissibility is
+       (see :mod:`causalphylo.graph_semantics`). Admissibility is
        a claim about what the edge means; weight is only a confidence
        in it, and no amount of confidence in an association promotes it
        to a mechanism.
@@ -655,7 +655,7 @@ def _resolve_edge_collisions(
        primary evidence and a collision must not discard the loser's
        provenance.
     """
-    from neorx.core.causal.graph_semantics import is_causal_admissible
+    from causalphylo import is_causal_admissible
 
     resolved: dict[tuple[str, str], dict[str, Any]] = {}
 
