@@ -7,8 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Changed
+### Added
+- **`neorx exp run genmol-validity`** — GenMol's validity measured under
+  each definition separately (parseable, sanitisable, unique, novel),
+  across five seeds at each of the three sampling temperatures the
+  repository generates at. One number called "validity" is how a 97 and
+  an 85 came to be reported in good faith of the same model: 0.8 is what
+  `genmol-eval` uses, 1.0 is the default of `generate()` and the HTTP
+  API, and 1.2 is what `core.pipeline` passes, and sanitisable validity
+  spans 0.95 to 0.79 across them.
+- **`docs/run-manifest.toml` gained a `[readme]` section**, so a figure in
+  the README is held to the same standard as one in a paper: the
+  provenance gates fail if it cites a run that is missing or not citable.
 
+### Changed
 - **The causal engine moved to its own package, `causalphylo`.**
   `neorx.core.causal.graph_semantics` and `neorx.core.causal.backdoor` --
   edge admissibility and Pearl's backdoor criterion -- were the only part of
@@ -35,12 +47,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   admissibility tests went to `causalphylo` and the file is named for what
   is left in it.
 
-### Removed
+- `src/neorx/genmol/data/cache/` is ignored. `neorx genmol download`
+  writes the training corpus there and `genmol-validity` requires it, and
+  an untracked file in the work tree would otherwise mark every run
+  record built afterwards non-citable.
 
+### Removed
 - `neorx.core.causal.backdoor` and `neorx.core.causal.graph_semantics`.
   Import them from `causalphylo` instead -- the top-level package re-exports
   everything both modules made public, under the same names.
 
+### Fixed
+- **README.md's "97% validity" for GenMol had no measurement behind it.**
+  It entered the README on 2026-03-31 in a commit about licensing and
+  shipped in 0.2.0, 0.3.0 and 0.3.1. The figure traces to
+  `results/genmol_paper4_final.json`, an untracked output of an untracked
+  script, which measured a single unseeded draw at temperature 0.8 from
+  `checkpoints/genmol_paper4/best_model.pt` — the epoch-28 checkpoint.
+  The wheel ships the epoch-30 one: `assets/molvae_chembl36.pt` is
+  byte-identical to that run's `final_model.pt`. So the headline number
+  was measured on weights nobody can install, at a temperature the README
+  never named, with no seed and no error bar. It is replaced by a table of
+  measured rates with their definitions, temperatures, sample size, seeds
+  and the run record backing them. The shipped model's sanitisable
+  validity is 0.887 ± 0.006 at `generate()`'s default temperature and
+  0.951 ± 0.003 at the 0.8 the original evaluation used — the 97% is
+  reproduced by neither.
+- **`genmol-eval` counted an empty decode as a valid molecule.**
+  `Chem.MolFromSmiles("")` returns an empty molecule rather than `None`,
+  so filtering on `m is not None` admitted every empty string the sampler
+  produced and inflated the reported validity. Latent at the temperatures
+  measured so far — no empty decode appeared in 75,000 molecules — but it
+  inflates a reported number by construction, so it is fixed rather than
+  noted.
 
 ## [0.3.1] — 2026-09-19
 

@@ -15,3 +15,10 @@
 [tables]
 
 [figures]
+
+# Claims made in README.md. The GenMol validity figure is the reason this
+# section exists: README.md asserted "97% validity" for three releases
+# with no record behind it, traceable only to an untracked artifact of an
+# untracked script, measured on a checkpoint the wheel does not ship.
+[readme]
+genmol_generation_quality = "2026-10-17-genmol-validity-7ea634"
