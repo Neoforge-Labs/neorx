@@ -68,8 +68,13 @@ NeoRx distinguishes these two cases automatically.
    implausible targets from advancing.
 
 4. **Generate Candidate Molecules** — GenMol variational autoencoder
-   (~4.1M parameters, 97% validity) generates novel drug-like molecules
-   targeting each causal protein.
+   (4,140,322 parameters) samples candidate molecules from the trained
+   weights shipped with the package, at temperature 0.8.  The VAE is not
+   target-conditioned: the same generative distribution is sampled for
+   every target, and target awareness enters at screening and docking.
+   Candidates within Tanimoto 0.7 of a known drug are rejected.  A
+   missing or corrupt checkpoint fails the job — nothing is substituted
+   for the model's output.
 
 5. **Screen Candidates** — MolScreen evaluates drug-likeness (Lipinski,
    QED, SA) and DockBot estimates binding affinity via AutoDock Vina.
