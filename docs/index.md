@@ -105,16 +105,6 @@ dependency graph, not by subject: everything that needs only a graph
 went, and everything written against NeoRx's own data model — evidence
 counting, scoring, ranking, target classification — stayed.
 
-!!! note "Mid-move, as of 2026-10-17"
-    The extraction is open as a pull request and not yet on `main`. Until
-    it merges, a checkout of `main` still contains
-    `neorx/core/causal/graph_semantics.py` and `backdoor.py`, and
-    `causalphylo` is declared only in the `docs` dependency group — these
-    pages are written for the merged state, and import from
-    `causalphylo`, because that is the package the code is moving to and
-    the one you should write against. Delete this note once the move
-    lands.
-
 ## Reproducibility is not a feature of this project
 
 It is a constraint on it. A manuscript audit of this codebase found that
