@@ -52,10 +52,12 @@ jobs:
             src/neorx/experiments/gates.py \
             src/neorx/experiments/__main__.py \
             experiments/genmol_eval.py \
+            experiments/genmol_validity.py \
             experiments/causalbiorl_bench.py \
             experiments/neorx_7disease.py \
             experiments/figures.py \
             tests/causalbiorl/test_env_generation.py \
+            tests/experiments/test_genmol_validity.py \
             tests/test_cli.py \
             tests/test_public_api.py
       - name: Ruff format (hard gate -- verified-clean paths)
@@ -74,10 +76,12 @@ jobs:
             src/neorx/experiments/gates.py \
             src/neorx/experiments/__main__.py \
             experiments/genmol_eval.py \
+            experiments/genmol_validity.py \
             experiments/causalbiorl_bench.py \
             experiments/neorx_7disease.py \
             experiments/figures.py \
             tests/causalbiorl/test_env_generation.py \
+            tests/experiments/test_genmol_validity.py \
             tests/test_cli.py \
             tests/test_public_api.py
 
@@ -193,10 +197,12 @@ jobs:
             src/neorx/experiments/gates.py \
             src/neorx/experiments/__main__.py \
             experiments/genmol_eval.py \
+            experiments/genmol_validity.py \
             experiments/causalbiorl_bench.py \
             experiments/neorx_7disease.py \
             experiments/figures.py \
             tests/causalbiorl/test_env_generation.py \
+            tests/experiments/test_genmol_validity.py \
             tests/test_cli.py \
             tests/test_public_api.py
       - name: Mypy (hard gate -- verified-clean paths)
@@ -215,10 +221,12 @@ jobs:
             src/neorx/experiments/gates.py \
             src/neorx/experiments/__main__.py \
             experiments/genmol_eval.py \
+            experiments/genmol_validity.py \
             experiments/causalbiorl_bench.py \
             experiments/neorx_7disease.py \
             experiments/figures.py \
             tests/causalbiorl/test_env_generation.py \
+            tests/experiments/test_genmol_validity.py \
             tests/test_cli.py \
             tests/test_public_api.py
 

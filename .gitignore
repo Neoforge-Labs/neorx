@@ -78,3 +78,11 @@ runs/*
 # Built documentation site (mkdocs build output). Published by
 # .github/workflows/docs.yml from a fresh build, never from a commit.
 site/
+
+# ChEMBL training corpus, fetched by `genmol download` into the path
+# load_smiles() reads by default. It is a download cache, not an asset:
+# the wheel ships the trained weights, not the data they were trained on.
+# Ignored so that fetching it -- which `genmol-validity` requires, since
+# novelty has no meaning without a reference set -- does not dirty the
+# tree and make every run record built afterwards non-citable.
+src/neorx/genmol/data/cache/
