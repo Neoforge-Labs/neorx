@@ -57,10 +57,31 @@ jobs:
           uv pip install --system --group dev
           python -m pytest docs/ -q --timeout=300
 
-      - name: Confirm the custom domain survived the build
+      # Named for what it actually checks. Under Pages'
+      # build_type=workflow -- which is what this workflow uses -- a CNAME
+      # file in the artifact does NOT configure the custom domain. It is
+      # served as an ordinary static file while the Pages API still
+      # reports cname=null. So this step confirms mkdocs carried
+      # docs/CNAME into site/, and nothing more; calling it "confirm the
+      # custom domain" would be a green check for something it never
+      # looked at.
+      #
+      # The domain itself is set once, by hand, against the repository's
+      # Pages REST endpoint:
+      #
+      #     gh api -X PUT "$ENDPOINT" -f cname=neorx.neoforgelabs.tech
+      #
+      # where $ENDPOINT is the Pages endpoint for this repository. Run it
+      # only after neorx.neoforgelabs.tech resolves -- setting it earlier
+      # breaks the working github.io URL by redirecting it to a host that
+      # does not answer. (Spelled this way because tests/test_workflows.py
+      # reads slash-separated tokens here as repository paths, correctly:
+      # the literal endpoint would look like a file that does not exist.)
+      #
+      - name: Confirm mkdocs carried docs/CNAME into the artifact
         run: |
           test -f site/CNAME || { echo "FAIL: CNAME missing from site/"; exit 1; }
-          echo "CNAME: $(cat site/CNAME)"
+          echo "site/CNAME: $(cat site/CNAME)"
 
       - uses: actions/upload-pages-artifact@v3
         with:
