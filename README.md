@@ -424,6 +424,12 @@ as mean ± standard deviation across seeds.
 | 1.0 (`generate()` default) | 0.942 ± 0.004 | 0.887 ± 0.006 | 0.983 ± 0.001 | 0.878 ± 0.005 |
 | 1.2 | 0.889 ± 0.004 | 0.788 ± 0.004 | 0.993 ± 0.001 | 0.915 ± 0.002 |
 
+All four are measured over raw sampler output, which is the only way they
+are measurable at all: `generate()` defaults to `validate=True,
+deduplicate=True`, so every rate computed over its return value is
+structurally 1.0 — a measurement of the filter, not of the model.  A rate
+over raw output needs `generate(validate=False, deduplicate=False)`.
+
 **Parseable** is the fraction RDKit reads into a molecule graph with at
 least one atom.  **Sanitisable** additionally requires consistent
 valences, aromaticity and kekulisation; it is what `Chem.MolFromSmiles`
