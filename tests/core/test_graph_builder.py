@@ -208,7 +208,7 @@ class TestEdgeCollisionResolution:
         )
 
     def test_causal_edge_survives_regardless_of_insertion_order(self):
-        from neorx.core.causal.graph_semantics import is_causal_admissible
+        from causalphylo import is_causal_admissible
 
         for label, edges in (
             ("string first", (self._string_edge(), self._omnipath_edge())),
@@ -223,7 +223,7 @@ class TestEdgeCollisionResolution:
 
     def test_causal_edge_wins_even_when_the_associational_one_weighs_more(self):
         # STRING's weight is higher, but weight never outranks admissibility.
-        from neorx.core.causal.graph_semantics import is_causal_admissible
+        from causalphylo import is_causal_admissible
 
         G = disease_graph_to_networkx(
             self._pair(self._omnipath_edge(weight=0.2), self._string_edge(weight=1.0))
