@@ -74,15 +74,35 @@ returns *at most* `n` molecules. Both are switchable:
 
 ```
 
-!!! warning "A measured validity rate, not a claimed one"
-    Sampling 200 molecules at `torch.manual_seed(0)` on this machine
-    (Python 3.13, macOS arm64, PyTorch 2.x) gave a validity of **0.855**
-    and a uniqueness of **1.0** among the survivors.
+!!! warning "This page quotes no validity rate, deliberately"
+    NeoRx's README reports 97% validity. That figure is not reproduced
+    here, because nothing in this repository traces it to a run — and a
+    quick local sample disagreed with it by enough that repeating either
+    number would be guessing which one is right.
 
-    That figure is not asserted as a doctest, because it depends on the
-    PyTorch build and the platform RNG, and a number that moves with the
-    runner is not something a gate should enforce. A rate you can cite
-    comes from a recorded run — see
+    Measure it yourself rather than taking a figure on trust. `validity`
+    is the fraction of **raw decoder output** that RDKit can parse, so
+    the sample has to come from `generate(..., validate=False,
+    deduplicate=False)` — passing it an already-filtered list measures
+    the filter, not the model:
+
+    ```python
+    import torch
+    from neorx.genmol import load_pretrained, generate
+    from neorx.genmol.evaluation import validity
+
+    model, tokenizer = load_pretrained()
+    torch.manual_seed(0)
+    raw = generate(model, tokenizer, n=1000,
+                   validate=False, deduplicate=False)
+    print(validity(raw))
+    ```
+
+    The result moves with the seed, the sample size and the PyTorch
+    build, which is why no number from one run belongs on this page and
+    why this block is not a doctest. A rate worth citing comes from the
+    `genmol-eval` experiment, which writes a run record naming the code
+    SHA, the dependency versions and the platform — see
     [Experiments and run records](experiments.md).
 
 ## Evaluating a sample
