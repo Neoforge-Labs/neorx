@@ -84,7 +84,7 @@ INTERACTION_COLUMNS: dict[str, pl.DataType] = {
     "references": pl.Utf8,
 }
 
-# The OpenTargets datatypes that neorx.core.causal.graph_semantics treats
+# The OpenTargets datatypes that causalphylo.graph_semantics treats
 # as conferring causal admissibility on a gene-disease edge, on the
 # Mendelian randomisation warrant. Adding a name here silently widens what
 # the backdoor criterion may reason over.

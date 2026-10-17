@@ -64,7 +64,7 @@ def summarise_identification(results) -> dict:
     Every reason appears in ``reason_counts`` even at zero, so a run's
     breakdown has the same shape whatever it found.
     """
-    from neorx.core.causal.backdoor import IdentificationReason
+    from causalphylo import IdentificationReason
 
     counts = {reason.value: 0 for reason in IdentificationReason}
     for result in results:

@@ -185,7 +185,7 @@ class TestIdentificationIsReported:
     """
 
     def test_result_carries_the_identification_reason(self, hiv_graph):
-        from neorx.core.causal.backdoor import IdentificationReason
+        from causalphylo import IdentificationReason
 
         targets = identify_causal_targets(hiv_graph, top_n=5)
         assert targets

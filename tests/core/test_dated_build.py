@@ -752,7 +752,8 @@ def test_a_dated_build_hits_its_own_cache(tmp_path, monkeypatch):
 
 def _identification(graph, gene):
     """The identification verdict on ``gene`` in an assembled graph."""
-    from neorx.core.causal.backdoor import find_adjustment_set
+    from causalphylo import find_adjustment_set
+
     from neorx.core.graph.graph_builder import disease_graph_to_networkx
 
     return find_adjustment_set(

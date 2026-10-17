@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The causal engine moved to its own package, `causalphylo`.**
+  `neorx.core.causal.graph_semantics` and `neorx.core.causal.backdoor` --
+  edge admissibility and Pearl's backdoor criterion -- were the only part of
+  the causal code that depended on nothing but NetworkX, and
+  `core/graph/graph_builder.py` already imported admissibility back out of
+  them. Two packages that import each other are not two packages, so the
+  boundary was drawn where the dependency graph allows a real one. NeoRx now
+  declares `causalphylo>=0.1.0` and imports `is_causal_admissible`,
+  `find_adjustment_set`, `IdentificationReason` and
+  `GENETIC_EVIDENCE_CLASSES` from it. Behaviour is unchanged: the modules
+  moved with their history and their tests.
+
+  The rest of `neorx.core.causal` stays here. `evidence`, `ranking`,
+  `scoring`, `identifier` and `counterfactual` are written against
+  `DiseaseGraph`, `NeoRxResult`, `TargetType` and CausalBioRL's
+  `StructuralCausalModel`; they are NeoRx's drug-target pipeline rather than
+  a general causal library, and moving them would have required NeoRx's data
+  model to move too.
+
+- `tests/core/test_graph_semantics.py` is now
+  `tests/core/test_graph_edge_evidence.py`. It had held three tests of
+  NeoRx's own `GraphEdge` model ahead of the admissibility tests, which is
+  also what made it the one file in the suite raising `E402`; the
+  admissibility tests went to `causalphylo` and the file is named for what
+  is left in it.
+
+### Removed
+
+- `neorx.core.causal.backdoor` and `neorx.core.causal.graph_semantics`.
+  Import them from `causalphylo` instead -- the top-level package re-exports
+  everything both modules made public, under the same names.
+
+
 ## [0.3.1] — 2026-09-19
 
 A packaging fix. 0.3.0's command line could not start on a clean install,

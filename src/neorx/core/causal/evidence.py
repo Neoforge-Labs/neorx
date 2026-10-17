@@ -213,7 +213,7 @@ def _estimate_evidence_score(
     # 2. Adjustment set weight
     # Heuristic weight distinguishing targets with an adjustment set (1.0) from
     # those without (0.8). NOT a d-separation result; identification is decided
-    # by neorx.core.causal.backdoor.find_adjustment_set.
+    # by causalphylo.backdoor.find_adjustment_set.
     dsep_factor = 1.0 if adjustment_set else 0.8
 
     # 3. Topological importance (betweenness centrality)

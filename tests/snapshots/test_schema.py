@@ -6,8 +6,8 @@ column set is defined once, here, and asserted rather than assumed.
 """
 
 import polars as pl
+from causalphylo import GENETIC_EVIDENCE_CLASSES
 
-from neorx.core.causal.graph_semantics import GENETIC_EVIDENCE_CLASSES
 from neorx.snapshots.schema import (
     ASSOCIATION_COLUMNS,
     EXTRACTOR_VERSION,
@@ -46,7 +46,7 @@ def test_empty_interaction_frame_matches_the_declared_schema():
 
 def test_genetic_datatypes_are_exactly_the_two_that_confer_admissibility():
     # These are the OpenTargets datatype names that
-    # neorx.core.causal.graph_semantics treats as causal-admissible for a
+    # causalphylo.graph_semantics treats as causal-admissible for a
     # gene-disease edge. A third name added here silently widens what the
     # backdoor criterion is allowed to reason over.
     assert GENETIC_DATATYPES == frozenset({"genetic_association", "somatic_mutation"})
