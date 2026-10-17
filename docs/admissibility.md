@@ -24,7 +24,7 @@ stop being arrows.
 Two edge attributes decide it: `edge_type` and `evidence_class`.
 
 ```python
->>> from neorx.core.causal.graph_semantics import CAUSAL_EDGE_TYPES
+>>> from causalphylo import CAUSAL_EDGE_TYPES
 >>> sorted(CAUSAL_EDGE_TYPES)
 ['activates', 'causes', 'downregulates', 'inhibits', 'phosphorylates',
  'regulates', 'upregulates']
@@ -36,7 +36,7 @@ the influence runs. An edge of one of these types is admissible on its
 type alone.
 
 ```python
->>> from neorx.core.causal.graph_semantics import is_causal_admissible
+>>> from causalphylo import is_causal_admissible
 >>> is_causal_admissible({"edge_type": "inhibits"})
 True
 >>> is_causal_admissible({"edge_type": "interacts_with"})
@@ -56,7 +56,7 @@ graph points whichever way the API happened to order the pair.
 admissible only under genetic evidence:
 
 ```python
->>> from neorx.core.causal.graph_semantics import GENETIC_EVIDENCE_CLASSES
+>>> from causalphylo import GENETIC_EVIDENCE_CLASSES
 >>> sorted(GENETIC_EVIDENCE_CLASSES)
 ['genetic_association', 'somatic_mutation']
 >>> is_causal_admissible({"edge_type": "associated_with",
@@ -92,7 +92,7 @@ cannot be a treatment, an outcome, or a confounder.
 
 ```python
 >>> import networkx as nx
->>> from neorx.core.causal.graph_semantics import causal_subgraph
+>>> from causalphylo import causal_subgraph
 >>> G = nx.DiGraph()
 >>> G.add_edge("CCL5", "CCR5", edge_type="regulates",
 ...            evidence_class="regulatory")
@@ -123,7 +123,7 @@ data does not support — the admissible subgraph is reduced to its
 acyclic core, and what was removed is reported.
 
 ```python
->>> from neorx.core.causal.graph_semantics import cyclic_components, acyclic_core
+>>> from causalphylo import cyclic_components, acyclic_core
 >>> H = nx.DiGraph()
 >>> H.add_edge("A", "B", edge_type="activates")
 >>> H.add_edge("B", "A", edge_type="inhibits")
@@ -164,5 +164,7 @@ which does this over any NetworkX graph with one runtime dependency.
 If identification over your own graph is what you want, depend on that
 rather than on NeoRx.
 
-NeoRx still carries its own copy of these modules; CausalPhylo is not
-yet a declared dependency here.
+NeoRx depends on CausalPhylo rather than keeping a second copy, which
+is why every import on this page is `from causalphylo import ...`. The
+admissibility *vocabulary* is still a decision with biomedical content —
+see the note above on widening it — but the rules that read it are not.

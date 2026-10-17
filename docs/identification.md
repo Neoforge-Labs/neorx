@@ -21,7 +21,7 @@ happens inside, so no caller can forget that step.
 
 ```python
 >>> import networkx as nx
->>> from neorx.core.causal.backdoor import find_adjustment_set
+>>> from causalphylo import find_adjustment_set
 >>> G = nx.DiGraph()
 >>> G.add_edge("CCL5", "CCR5", edge_type="regulates",
 ...            evidence_class="regulatory")
@@ -49,7 +49,7 @@ reasons are a closed enum, so a run's failures aggregate into a
 distribution:
 
 ```python
->>> from neorx.core.causal.backdoor import IdentificationReason
+>>> from causalphylo import IdentificationReason
 >>> [r.value for r in IdentificationReason]
 ['identifiable_by_adjustment', 'identifiable_trivially', 'no_causal_path',
  'cyclic_component', 'no_valid_adjustment_set', 'treatment_absent',
@@ -119,7 +119,7 @@ interventional graph `G_X̄` — what the do-operator's truncated
 factorisation is defined on.
 
 ```python
->>> from neorx.core.causal.backdoor import mutilated_graph
+>>> from causalphylo import mutilated_graph
 >>> M = nx.DiGraph([("U", "X"), ("X", "Y"), ("U", "Y")])
 >>> sorted(mutilated_graph(M, "X").edges)
 [('U', 'Y'), ('X', 'Y')]
@@ -136,7 +136,7 @@ arrow — exactly as it was. Without it, the direct causal edge registers
 as "still connected" and masks an open backdoor path.
 
 ```python
->>> from neorx.core.causal.backdoor import satisfies_backdoor
+>>> from causalphylo import satisfies_backdoor
 >>> D = nx.DiGraph([("U", "X"), ("U", "Y"), ("X", "Y")])
 >>> satisfies_backdoor(D, "X", "Y", frozenset())        # U is unblocked
 False
@@ -156,7 +156,7 @@ it is a different estimand.
 The search enumerates candidate subsets, so it is bounded:
 
 ```python
->>> from neorx.core.causal.backdoor import (MAX_ADJUSTMENT_SET_SIZE,
+>>> from causalphylo import (MAX_ADJUSTMENT_SET_SIZE,
 ...                                         MAX_CANDIDATE_POOL)
 >>> MAX_ADJUSTMENT_SET_SIZE
 3
@@ -204,5 +204,7 @@ robustness check — see [From verdict to target](targets.md).
 This module has no biomedical content: it reads edge attributes and graph
 structure. It has been extracted as
 [CausalPhylo](https://causalphylo.neoforgelabs.tech/) for use over any
-NetworkX graph. NeoRx still carries its own copy and does not yet depend
-on the package.
+NetworkX graph, and NeoRx depends on it rather than keeping a second
+copy — every import on this page is `from causalphylo import ...`.
+What stayed in `neorx.core.causal` is the part written against NeoRx's
+own data model: evidence counting, scoring, ranking and classification.

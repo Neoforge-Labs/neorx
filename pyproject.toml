@@ -163,6 +163,22 @@ dev = [
     "vcrpy>=8.3",
 ]
 docs = [
+    # The documented examples for admissibility and the backdoor
+    # criterion import from causalphylo, which is where that engine now
+    # lives. They run as doctests, so the docs job needs it installed.
+    #
+    # It is in THIS group rather than [project].dependencies on purpose:
+    # on this branch it is the doc examples that need it, not the
+    # library. Once the extraction lands on main, causalphylo arrives
+    # through [project].dependencies and this entry becomes redundant --
+    # delete it then rather than leaving two declarations to drift.
+    #
+    # 0.1.0 is the only release. Verified 2026-10-17 against the
+    # published wheel on PyPI (requires-python >=3.12, sole dependency
+    # networkx>=3.3, both already satisfied here), confirmed
+    # byte-for-byte identical to the source the examples were checked
+    # against.
+    "causalphylo>=0.1.0",
     # Floors are the versions this site was built and checked against on
     # 2026-10-17: `mkdocs build --strict` clean, and the API pages
     # verified to contain prose pulled from the real docstrings rather

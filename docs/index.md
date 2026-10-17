@@ -32,7 +32,7 @@ in an association score carries direction.
 NeoRx's answer is to refuse to treat the two kinds of claim alike:
 
 ```python
->>> from neorx.core.causal.graph_semantics import is_causal_admissible
+>>> from causalphylo import is_causal_admissible
 >>> is_causal_admissible({"edge_type": "associated_with",
 ...                       "evidence_class": "genetic_association"})
 True
@@ -99,9 +99,21 @@ If you want identification over your own graph rather than drug
 discovery, that is the smaller thing to depend on: one runtime
 dependency, NetworkX.
 
-NeoRx still carries its own copy of those modules
-(`neorx.core.causal.graph_semantics`, `neorx.core.causal.backdoor`);
-CausalPhylo is not yet a declared dependency here.
+NeoRx depends on it rather than carrying a second copy, so
+`is_causal_admissible` above is CausalPhylo's. The division is along the
+dependency graph, not by subject: everything that needs only a graph
+went, and everything written against NeoRx's own data model — evidence
+counting, scoring, ranking, target classification — stayed.
+
+!!! note "Mid-move, as of 2026-10-17"
+    The extraction is open as a pull request and not yet on `main`. Until
+    it merges, a checkout of `main` still contains
+    `neorx/core/causal/graph_semantics.py` and `backdoor.py`, and
+    `causalphylo` is declared only in the `docs` dependency group — these
+    pages are written for the merged state, and import from
+    `causalphylo`, because that is the package the code is moving to and
+    the one you should write against. Delete this note once the move
+    lands.
 
 ## Reproducibility is not a feature of this project
 

@@ -12,55 +12,37 @@ True
 
 ```
 
-## neorx.core.causal.graph_semantics
+## causalphylo — admissibility and identification
 
-Which edges may carry a causal claim. See
-[Which edges earn an arrow](admissibility.md).
-
-::: neorx.core.causal.graph_semantics
-    options:
-      show_root_heading: false
-      members:
-        - is_causal_admissible
-        - causal_subgraph
-        - cyclic_components
-        - acyclic_core
-        - AcyclicCore
-
-### Vocabularies
-
-`CAUSAL_EDGE_TYPES`
-:   Frozenset of `edge_type` values that assert a directed mechanism.
-
-`GENETIC_EVIDENCE_CLASSES`
-:   Frozenset of `evidence_class` values that license a gene-to-disease
-    arrow.
-
-## neorx.core.causal.backdoor
-
-Identification on the admissible subgraph. See
+Edge admissibility and Pearl's backdoor criterion are **not in this
+package**. They depend on nothing but NetworkX, so they live in
+[CausalPhylo](https://causalphylo.neoforgelabs.tech/), which NeoRx
+imports them from. The narrative pages that use them are
+[Which edges earn an arrow](admissibility.md) and
 [Identification](identification.md).
 
-::: neorx.core.causal.backdoor
-    options:
-      show_root_heading: false
-      members:
-        - find_adjustment_set
-        - Identification
-        - IdentificationReason
-        - satisfies_backdoor
-        - mutilated_graph
-        - confounding_sensitivity
+They are not re-documented here. Duplicating another package's API
+reference means two copies that drift, and the authoritative one is
+[CausalPhylo's own API reference](https://causalphylo.neoforgelabs.tech/api/).
 
-### Search bounds
+Everything both modules make public is re-exported from the top level,
+so a single import reaches all of it:
 
-`MAX_ADJUSTMENT_SET_SIZE`
-:   Largest adjustment set the search will consider. Default `3`.
+```python
+>>> from causalphylo import (
+...     is_causal_admissible, causal_subgraph, cyclic_components,
+...     acyclic_core, AcyclicCore,
+...     CAUSAL_EDGE_TYPES, GENETIC_EVIDENCE_CLASSES,
+...     find_adjustment_set, Identification, IdentificationReason,
+...     satisfies_backdoor, mutilated_graph, confounding_sensitivity,
+...     MAX_ADJUSTMENT_SET_SIZE, MAX_CANDIDATE_POOL,
+... )
 
-`MAX_CANDIDATE_POOL`
-:   Largest candidate pool the search will draw from. Default `20`.
+```
 
-Reaching either bound sets `Identification.search_truncated`.
+The submodule paths `causalphylo.graph_semantics` and
+`causalphylo.backdoor` also work, and are what the CausalPhylo reference
+is organised by.
 
 ## neorx.core.causal.identifier
 
