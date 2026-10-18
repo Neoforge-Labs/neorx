@@ -1,0 +1,111 @@
+site_name: NeoRx
+site_description: Causal drug target discovery — asking whether intervening on a protein would change the disease, not whether the two co-occur.
+site_author: Kelyn Paul Njeri
+site_url: https://neorx.neoforgelabs.tech/
+repo_url: https://github.com/Neoforge-Labs/neorx
+repo_name: Neoforge-Labs/neorx
+copyright: Copyright &copy; 2026 Kelyn Paul Njeri, NeoForge Labs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - toc.follow
+
+nav:
+  - Overview: index.md
+  - Install: install.md
+  - A worked example: worked-example.md
+  - The causal argument:
+      - Which edges earn an arrow: admissibility.md
+      - Identification: identification.md
+      - From verdict to target: targets.md
+  - Building the graph:
+      - The graph and its sources: graph.md
+      - Versioned snapshots: snapshots.md
+      - OpenTargets release layouts: snapshot-layouts.md
+  - Molecules:
+      - GenMol — generation: genmol.md
+      - MolScreen — drug-likeness: molscreen.md
+      - DockBot — docking: dockbot.md
+      - Ranking candidates: scoring.md
+  - Other engines:
+      - CausalBioRL — reinforcement learning: causalbiorl.md
+      - MirrorFold — mirror-image proteins: mirrorfold.md
+  - Provenance:
+      - Experiments and run records: experiments.md
+  - Interfaces:
+      - Command line: cli.md
+      - REST API: rest-api.md
+  - API reference: api.md
+  - Licence: licence.md
+
+# The archived plans and specs under docs/superpowers record what was
+# planned on a date. They are history, not documentation, and a reader
+# following them would be following a decision that may since have been
+# reversed. They stay in the repository and out of the site.
+exclude_docs: |
+  superpowers/
+  run-manifest.toml
+
+# --strict already fails on a broken page link. Anchors are not checked
+# by default, and this site leans on them: a section link that silently
+# lands at the top of the right page is the failure mode a reader never
+# reports.
+validation:
+  anchors: warn
+  unrecognized_links: warn
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: true
+            show_root_heading: true
+            show_signature_annotations: true
+            separate_signature: true
+            docstring_style: numpy
+            members_order: source
+            heading_level: 3
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.details
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Neoforge-Labs/neorx
+    - icon: fontawesome/solid/envelope
+      link: mailto:kelyn@neoforgelabs.tech
