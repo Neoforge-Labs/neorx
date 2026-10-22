@@ -1,0 +1,10 @@
+{
+  "run_id": "2026-10-22-genmol-validity-a045aa",
+  "experiment": "genmol-validity",
+  "status": "complete",
+  "citable": true,
+  "n_rows": 15,
+  "size_bytes": 13298,
+  "rows_sha256": "89f30a1f229792f261d72d8727bffbeaaa322fd5d83e2f68b9c35e743370b236",
+  "finalised_utc": "2026-10-22T14:55:26.968708+00:00"
+}

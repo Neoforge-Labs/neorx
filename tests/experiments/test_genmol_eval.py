@@ -165,3 +165,43 @@ def test_diversity_is_computed_over_distinct_molecules_not_raw_duplicates():
     # different, deflated answer -- proving this test would catch it.
     raw_mols = [m for _, m in valid]
     assert _diversity(raw_mols) != reported
+
+
+def test_an_empty_decode_does_not_count_as_a_valid_molecule(tmp_path, monkeypatch):
+    """Chem.MolFromSmiles("") returns a molecule, not None.
+
+    So filtering on ``m is not None`` alone counts every empty decode as a
+    valid molecule. The sampler emits empty strings once the temperature
+    is high enough, and each one counted that way inflates the very number
+    this experiment exists to report. This must fail against the
+    ``m is not None`` implementation.
+    """
+    import experiments  # noqa: F401
+    import neorx.genmol as genmol_mod
+    import neorx.genmol.data.download as download_mod
+
+    assert Chem.MolFromSmiles("") is not None, (
+        "sanity: RDKit really does return a molecule for the empty string"
+    )
+
+    class _FakeParam:
+        def numel(self) -> int:
+            return 10
+
+    class _FakeModel:
+        def parameters(self):
+            return [_FakeParam()]
+
+    class _FakeTokenizer:
+        vocab_size = 5
+
+    monkeypatch.setattr(genmol_mod, "load_pretrained", lambda: (_FakeModel(), _FakeTokenizer()))
+    monkeypatch.setattr(
+        genmol_mod, "generate", lambda model, tokenizer, **kwargs: ["CCO", "", ""]
+    )
+    monkeypatch.setattr(download_mod, "load_smiles", lambda: [])
+
+    row = run_experiment("genmol-eval", runs_dir=tmp_path).rows()[0]
+
+    assert row["n_valid"] == 1, "one molecule and two empty strings"
+    assert row["validity"] == pytest.approx(1 / 3)

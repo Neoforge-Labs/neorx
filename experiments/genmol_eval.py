@@ -56,7 +56,12 @@ def genmol_eval(record: RunRecord) -> None:
     # two spellings of one molecule would count as unique, as novel, and
     # as a similarity-1.0 pair in diversity -- all three metrics moving in
     # the flattering direction for no chemical reason.
-    valid = [(s, m) for s, m in mols if m is not None]
+    # `m is not None` alone is not the question: Chem.MolFromSmiles("")
+    # returns an empty molecule rather than None, so an empty decode --
+    # which the sampler does produce once temperature is high enough --
+    # would be counted as a valid molecule and inflate validity. A
+    # zero-atom graph is not a molecule.
+    valid = [(s, m) for s, m in mols if m is not None and m.GetNumAtoms() > 0]
     canonical = [(Chem.MolToSmiles(m), m) for _, m in valid]
     unique = {c for c, _ in canonical}
 

@@ -74,7 +74,9 @@ NeoRx distinguishes these two cases automatically.
    every target, and target awareness enters at screening and docking.
    Candidates within Tanimoto 0.7 of a known drug are rejected.  A
    missing or corrupt checkpoint fails the job — nothing is substituted
-   for the model's output.
+   for the model's output.  Measured generation quality, with
+   the definition and sampling temperature each rate was measured at,
+   is under [GenMol generation quality](#genmol-generation-quality).
 
 5. **Screen Candidates** — MolScreen evaluates drug-likeness (Lipinski,
    QED, SA) and DockBot estimates binding affinity via AutoDock Vina.
@@ -413,6 +415,48 @@ PDFs and LaTeX sources are in [`papers/latex/`](papers/latex/).
 
 Zero known false positives promoted to CAUSAL across all 7 diseases.
 NeoRx outperforms a correlation-only baseline in 6 of 7 diseases (+80% mean F₁ improvement).
+
+### GenMol generation quality
+
+Measured on the weights the wheel ships
+(`src/neorx/genmol/assets/molvae_chembl36.pt`, 4,140,322 parameters),
+over raw decoder output — 5,000 molecules per cell, seeds 0–4, reported
+as mean ± standard deviation across seeds.
+
+| Sampling temperature | Parseable | Sanitisable | Unique | Novel |
+|---|---|---|---|---|
+| 0.8 | 0.974 ± 0.002 | 0.951 ± 0.003 | 0.943 ± 0.003 | 0.824 ± 0.002 |
+| 1.0 (`generate()` default) | 0.942 ± 0.004 | 0.887 ± 0.006 | 0.983 ± 0.001 | 0.878 ± 0.005 |
+| 1.2 | 0.889 ± 0.004 | 0.788 ± 0.004 | 0.993 ± 0.001 | 0.915 ± 0.002 |
+
+All four are measured over raw sampler output, which is the only way they
+are measurable at all: `generate()` defaults to `validate=True,
+deduplicate=True`, so every rate computed over its return value is
+structurally 1.0 — a measurement of the filter, not of the model.  A rate
+over raw output needs `generate(validate=False, deduplicate=False)`.
+
+**Parseable** is the fraction RDKit reads into a molecule graph with at
+least one atom.  **Sanitisable** additionally requires consistent
+valences, aromaticity and kekulisation; it is what `Chem.MolFromSmiles`
+accepts and what the generative-chemistry literature usually means by
+"validity".  **Unique** is distinct canonical SMILES among the
+sanitisable ones, and **novel** is distinct canonical SMILES absent from
+the 27,572-molecule ChEMBL training corpus.  Uniqueness and novelty are
+both sample-size dependent, so neither is comparable across runs of
+different size.
+
+Validity falls with temperature while uniqueness rises — the model has
+documented partial posterior collapse — so a rate quoted without its
+definition, temperature and sample size cannot be reproduced.  Run
+record: [`runs/2026-10-22-genmol-validity-a045aa`](runs/2026-10-22-genmol-validity-a045aa).
+Reproduce with `neorx exp run genmol-validity`.
+
+Parseability and sanitisability need only the shipped weights.  Novelty
+also needs the 27,572-molecule training corpus, which is a
+`neorx genmol download` cache rather than a packaged asset — a download
+run today returns a larger, different ChEMBL slice, so the run record
+carries the corpus SHA-256 and molecule count and a substituted corpus
+is detectable rather than silent.
 
 ## Citation
 
