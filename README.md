@@ -68,10 +68,13 @@ NeoRx distinguishes these two cases automatically.
    implausible targets from advancing.
 
 4. **Generate Candidate Molecules** — GenMol variational autoencoder
-   (4,140,322 parameters) generates novel drug-like molecules
-   targeting each causal protein.  Measured generation quality, with the
-   definition and sampling temperature each rate was measured at, is
-   under [GenMol generation quality](#genmol-generation-quality).
+   (4,140,322 parameters) samples candidate molecules for each causal
+   target.  The VAE is not target-conditioned: the same generative
+   distribution is sampled for every target, and target awareness enters
+   at screening and docking.  Candidates within Tanimoto 0.7 of a known
+   drug are rejected.  Measured generation quality, with the definition
+   and sampling temperature each rate was measured at, is under
+   [GenMol generation quality](#genmol-generation-quality).
 
 5. **Screen Candidates** — MolScreen evaluates drug-likeness (Lipinski,
    QED, SA) and DockBot estimates binding affinity via AutoDock Vina.
