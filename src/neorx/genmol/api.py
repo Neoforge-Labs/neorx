@@ -16,13 +16,13 @@ Endpoints::
 
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+
+from .pretrained import GenMolAssetError, load_pretrained
 
 logger = logging.getLogger(__name__)
 
@@ -38,43 +38,56 @@ _tokenizer = None
 _device = None
 
 
-def _load_model(
-    checkpoint_path: str = "checkpoints/genmol/best_model.pt",
-    tokenizer_path: str = "checkpoints/genmol/tokenizer.json",
-):
-    """Lazily load the VAE model and tokenizer."""
+def _load_model() -> None:
+    """Lazily load the packaged VAE weights and their matching tokenizer.
+
+    The weights come from :func:`neorx.genmol.load_pretrained`, which pairs
+    the shipped checkpoint with the tokenizer it was trained against and
+    raises :class:`GenMolAssetError` rather than returning an untrained
+    model.
+
+    There is deliberately no checkpoint-path override.  This function used
+    to default to ``checkpoints/genmol/best_model.pt``, which no fresh
+    checkout contains and nothing in the package creates, so every
+    generation endpoint failed on first request; where that untracked file
+    did happen to exist it was a different model from the one the package
+    ships, served with nothing in the response to say so.  A path argument
+    would reintroduce exactly that ambiguity, and no caller ever passed
+    one.
+
+    Raises
+    ------
+    GenMolAssetError
+        If the shipped assets are missing or unusable.
+    """
     global _model, _tokenizer, _device
 
     if _model is not None:
         return
 
     import torch
-    from .data.tokenizer import SmilesTokenizer
-    from .models.vae import MolVAE
-
-    _tokenizer = SmilesTokenizer.load(tokenizer_path)
-
-    ckpt = torch.load(
-        checkpoint_path, map_location="cpu", weights_only=False
-    )
-
-    _model = MolVAE(
-        vocab_size=_tokenizer.vocab_size,
-        max_length=_tokenizer.max_length,
-        pad_idx=_tokenizer.pad_idx,
-    )
-    _model.load_state_dict(ckpt["model_state_dict"])
-    _model.eval()
 
     if torch.cuda.is_available():
-        _device = torch.device("cuda")
+        device = torch.device("cuda")
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        _device = torch.device("mps")
+        device = torch.device("mps")
     else:
-        _device = torch.device("cpu")
+        device = torch.device("cpu")
 
-    _model = _model.to(_device)
-    logger.info("Model loaded on %s.", _device)
+    model, tokenizer = load_pretrained(device=device)
+
+    # load_pretrained passes `device` to torch.load as a map_location only;
+    # the parameters themselves stay on whichever device the model was built
+    # on, so moving them is still this caller's job.
+    model = model.to(device)
+
+    # _model is the sentinel the early return above tests, so it is assigned
+    # last: a failure anywhere above leaves the singleton unset and the next
+    # request retries rather than serving a half-initialised model.
+    _tokenizer = tokenizer
+    _device = device
+    _model = model
+    logger.info("Loaded packaged GenMol weights on %s.", device)
 
 
 # ── Request / Response Models ───────────────────────────────────────
@@ -161,11 +174,15 @@ def generate_molecules(req: GenerateRequest):
     """Generate molecules by sampling from the VAE prior."""
     try:
         _load_model()
-    except Exception as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Model not loaded: {e}",
-        )
+    except GenMolAssetError as e:
+        # 503 rather than 500: the weights are an installation-level
+        # precondition, so the service genuinely cannot serve this endpoint
+        # until an operator repairs them, and the condition is not the
+        # client's doing.  GenMolAssetError already names the cause and the
+        # remedy, so that message belongs in the response and not only in
+        # the server log.  Anything else is a bug and propagates as a 500
+        # instead of being relabelled "model not loaded".
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
     from .generate import generate, screen_generated
 
@@ -195,8 +212,10 @@ def interpolate_molecules(req: InterpolateRequest):
     """Interpolate between two molecules in latent space."""
     try:
         _load_model()
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    except GenMolAssetError as e:
+        # See the note on /generate for why this is a 503 and why only
+        # GenMolAssetError is caught here.
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
     from .generate import interpolate
 
