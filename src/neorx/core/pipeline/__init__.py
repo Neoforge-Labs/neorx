@@ -27,11 +27,13 @@ Integration Points
 
 Error Handling
 --------------
-Every sub-module integration is wrapped in try/except.
-If GenMol fails, we still report the causal targets.
-If DockBot fails, we score without binding affinity.
-The pipeline never crashes — it degrades gracefully and
-reports what it could accomplish.
+Degradation is allowed only where the degraded result is still an
+honest one.  If DockBot fails we score without binding affinity, and
+say so.  Generation is not like that: a candidate list is either the
+model's output or it is not, and nothing downstream can tell the
+difference, so ``_generate_for_target`` raises rather than substituting
+anything for the trained model.  A failure there fails the job, which
+is recorded on the ``PipelineJob``.
 """
 
 from __future__ import annotations
@@ -286,93 +288,107 @@ def run_pipeline(
 
 # ── Sub-module Integration ──────────────────────────────────────────
 
+# Sampling temperature for pipeline candidate generation.
+#
+# Measured on the shipped weights (run record
+# runs/2026-10-17-genmol-validity-7ea634, 5,000 molecules per cell,
+# seeds 0-4): sanitisable validity is 0.951 at T=0.8, 0.887 at T=1.0
+# and 0.788 at T=1.2.  Because `generate(validate=True)` discards
+# everything unsanitisable, temperature here buys nothing but yield:
+# at T=1.2 one sample in five is thrown away, at T=0.8 one in twenty.
+#
+# The diversity argument for a higher temperature does not apply to
+# this call site.  Corpus novelty does fall with temperature (0.824 at
+# T=0.8 against 0.915 at T=1.2), but the pipeline does not rely on
+# sampling noise for novelty -- `_filter_novel` rejects anything within
+# Tanimoto 0.7 of a known drug, which is both stricter and the
+# criterion that actually matters for a candidate.  So: sample at the
+# temperature with the highest yield and let the novelty filter do the
+# novelty.
+#
+# The former value here was 1.2, chosen when this function generated
+# from an untrained model, where no temperature was defensible.
+_GENERATION_TEMPERATURE = 0.8
+
+
 def _generate_for_target(
     target: NeoRxResult,
     n_molecules: int,
 ) -> list[str]:
-    """Generate candidate molecules using GenMol.
+    """Generate candidate molecules for *target* with the trained GenMol VAE.
 
-    Falls back to a small set of known drug-like SMILES if GenMol
-    is not available (e.g. no trained model checkpoint).
-    """
-    try:
-        from neorx.genmol.data import SmilesTokenizer
-        from neorx.genmol.models import MolVAE
-        from neorx.genmol.generate import generate
+    Generation uses the weights shipped with the package, via
+    ``neorx.genmol.load_pretrained()``, which returns the checkpoint and
+    the tokenizer it was trained against as a matched pair.
 
-        # Try to load a pre-trained checkpoint
-        import torch
-        tok = SmilesTokenizer()
-
-        # Build vocabulary from representative drug-like SMILES so
-        # the tokenizer can encode / decode.  Without this step the
-        # tokenizer's _built flag is False and decode() will raise.
-        _REPRESENTATIVE_SMILES = [
-            "c1ccccc1",                       # benzene
-            "CC(=O)Oc1ccccc1C(O)=O",          # aspirin
-            "CC(C)Cc1ccc(C(C)C(O)=O)cc1",     # ibuprofen
-            "O=C(NCc1ccccc1)c1cc2ccccc2[nH]1", # indole amide
-            "Cc1nc2ccccc2n1Cc1ccc(F)cc1",       # benzimidazole
-            "c1ccc(-c2nc3ccccc3s2)cc1",         # benzothiazole
-            "CC1=NN(c2ccccc2)C(=O)C1",          # pyrazolone
-            "Oc1ccc(-c2cc(-c3ccc(O)cc3)no2)cc1", # isoxazole
-            "NC(=O)c1cccc(-c2cccnc2)c1",        # nicotinamide
-            "CC(=O)Nc1ccc(O)cc1",               # paracetamol
-            "ClC(Cl)=C(Cl)Cl",                  # chlorinated
-            "BrC1=CC=CC=C1",                    # bromobenzene
-            "[C@@H](O)(F)Cl",                   # chirality
-        ]
-        tok.build_vocab(_REPRESENTATIVE_SMILES)
-
-        # If no trained model, generate from random init (for demo)
-        model = MolVAE(vocab_size=max(tok.vocab_size, 64))
-        model.eval()
-
-        smiles = generate(
-            model, tok, n=min(n_molecules, 200),
-            temperature=1.2, validate=True,
-        )
-        if smiles:
-            # Apply Tanimoto novelty filter: reject molecules too
-            # similar to known drugs (Tanimoto ≥ 0.7)
-            smiles = _filter_novel(smiles, max_tanimoto=0.7)
-            return smiles
-
-    except Exception as e:
-        logger.warning("GenMol generation failed: %s. Using fallback.", e)
-
-    # Fallback: curated drug-like molecules
-    return _fallback_molecules(target.gene_name)
-
-
-def _fallback_molecules(gene_name: str) -> list[str]:
-    """Return diverse drug-like SMILES as fallback.
-
-    These are structurally diverse, Lipinski-compliant scaffolds
-    that serve as demonstration candidates when GenMol is
-    unavailable.  They are disease- and target-agnostic — the
-    real structure–activity intelligence comes from GenMol and
-    the downstream screening / docking steps.
+    There is no fallback.  This function used to build a tokenizer from
+    thirteen hard-coded SMILES, instantiate ``MolVAE`` fresh, generate
+    from those random weights, and -- on any failure, including the
+    common one of random weights emitting nothing sanitisable -- return
+    a list of curated drug-like scaffolds.  Downstream scoring could
+    not tell any of those three outcomes apart, so every candidate the
+    pipeline ever reported was either chemical noise or a hard-coded
+    molecule presented as a model output.  A missing checkpoint is a
+    broken installation and a failed job, not a reason to invent
+    candidates.
 
     Parameters
     ----------
-    gene_name : str
-        Ignored — kept for API compatibility.  The same diverse
-        scaffold library is returned for every target so the
-        pipeline never hard-codes disease-specific chemistry.
+    target : NeoRxResult
+        The causal target these candidates are generated for.  Recorded
+        in the log line; generation itself is unconditional on it (the
+        VAE is not target-conditioned -- target awareness enters at the
+        screening and docking steps).
+    n_molecules : int
+        How many molecules to sample.  Fewer are returned: sampling
+        discards unsanitisable decodes, deduplicates, and the novelty
+        filter rejects near-duplicates of known drugs.
+
+    Returns
+    -------
+    list[str]
+        Canonical SMILES, novel by the Tanimoto criterion.
+
+    Raises
+    ------
+    neorx.genmol.GenMolAssetError
+        If the shipped checkpoint or tokenizer is missing or corrupt.
+    RuntimeError
+        If the model yields no sanitisable molecule at all.  At this
+        temperature the measured rate is 0.951, so an empty decode is a
+        broken model or tokenizer rather than an unlucky draw, and
+        reporting zero candidates from a job marked COMPLETE would hide
+        it.
     """
-    return [
-        "c1ccc2[nH]c(-c3ccncc3)nc2c1",                    # benzimidazole
-        "O=C(NCc1ccccc1)c1cc2ccccc2[nH]1",                 # indole amide
-        "Cc1nc2ccccc2n1Cc1ccc(F)cc1",                       # benzimidazole
-        "O=C(c1ccc(O)cc1)c1ccc(O)cc1O",                     # dihydroxybenzophenone
-        "CC(=O)Nc1ccc(O)cc1",                               # paracetamol scaffold
-        "c1ccc(-c2nc3ccccc3s2)cc1",                         # benzothiazole
-        "O=c1[nH]c2ccccc2c2ccccc12",                        # acridone
-        "NC(=O)c1cccc(-c2cccnc2)c1",                        # nicotinamide analog
-        "Oc1ccc(-c2cc(-c3ccc(O)cc3)no2)cc1",               # isoxazole diol
-        "CC1=NN(c2ccccc2)C(=O)C1",                          # pyrazolone
-    ]
+    from neorx.genmol import load_pretrained
+    from neorx.genmol.generate import generate
+
+    model, tokenizer = load_pretrained()
+
+    smiles = generate(
+        model,
+        tokenizer,
+        n=n_molecules,
+        temperature=_GENERATION_TEMPERATURE,
+        validate=True,
+    )
+    if not smiles:
+        raise RuntimeError(
+            f"GenMol returned no sanitisable molecule from {n_molecules} "
+            f"samples at T={_GENERATION_TEMPERATURE} for target "
+            f"{target.gene_name or target.protein_id}. The shipped weights "
+            f"measure 0.951 sanitisable at this temperature, so this is a "
+            f"model/tokenizer mismatch, not an unlucky draw."
+        )
+
+    logger.info(
+        "GenMol: %d sanitisable molecules from %d samples for %s (T=%.1f).",
+        len(smiles),
+        n_molecules,
+        target.gene_name or target.protein_id,
+        _GENERATION_TEMPERATURE,
+    )
+    return _filter_novel(smiles, max_tanimoto=0.7)
 
 
 def _screen_candidates(

@@ -10,8 +10,9 @@ built ONCE rather than once per test.
 import pytest
 from neorx.core.pipeline import (
     run_pipeline,
-    _fallback_molecules,
     _estimate_admet,
+    _generate_for_target,
+    _GENERATION_TEMPERATURE,
 )
 from neorx.core.graph.models import (
     PipelineResult,
@@ -95,24 +96,150 @@ class TestRunPipeline:
         assert result.graph is not None
 
 
-class TestFallbackMolecules:
-    """Test the fallback molecule generator."""
+class TestGenerateForTarget:
+    """Candidates must come from the trained GenMol weights.
 
-    def test_returns_molecules(self):
-        mols = _fallback_molecules("CCR5")
-        assert len(mols) > 0
-        assert all(isinstance(s, str) for s in mols)
+    ``_generate_for_target`` used to build a tokenizer from thirteen
+    hard-coded SMILES and sample from a freshly constructed, untrained
+    ``MolVAE`` -- ``load_pretrained()`` was never called. The body was
+    wrapped in ``except Exception: logger.warning(...)`` followed by a
+    list of curated scaffolds, and random weights usually decode to
+    nothing sanitisable, so most runs silently returned those ten
+    scaffolds and the rest returned noise (measured: ``["Cl"]`` at seed
+    0, ``["O"]`` at seed 1). Downstream screening and docking could not
+    distinguish any of the three outcomes.
 
-    def test_same_scaffolds_for_any_gene(self):
-        """Fallback molecules are now disease-agnostic."""
-        mols_ccr5 = _fallback_molecules("CCR5")
-        mols_unknown = _fallback_molecules("UNKNOWN_GENE")
-        assert mols_ccr5 == mols_unknown
-        assert len(mols_ccr5) == 10
+    These tests pin the two halves of the fix: generation is the shipped
+    model's output, and a missing model is a failure rather than a
+    substitution.
+    """
 
-    def test_unknown_gene_returns_general(self):
-        mols = _fallback_molecules("UNKNOWN_GENE")
-        assert len(mols) > 0  # At least general scaffolds
+    @staticmethod
+    def _target():
+        from neorx.core.graph.models import NeoRxResult
+
+        return NeoRxResult(
+            protein_id="P04637",
+            protein_name="Cellular tumor antigen p53",
+            gene_name="TP53",
+            uniprot_id="P04637",
+            is_causal_target=True,
+        )
+
+    def test_uses_the_shipped_tokenizer(self, monkeypatch):
+        """The tokenizer handed to ``generate`` is the shipped asset.
+
+        The thirteen-SMILES vocabulary had 25 tokens against the
+        asset's 34, lacked ten the trained model emits (``# + 4 5 6 8 9
+        I P S``) and contained one it does not (``@@``). It also drove
+        ``MolVAE(vocab_size=max(25, 64))`` -- a 4,151,872-parameter
+        model where the checkpoint has 4,140,322, so the shipped
+        weights could not have been loaded into it even by accident.
+        """
+        import importlib
+
+        from neorx.genmol.data.tokenizer import SmilesTokenizer
+        from neorx.genmol.pretrained import ASSET_DIR, TOKENIZER_NAME
+
+        # ``neorx.genmol`` re-exports the ``generate`` *function*, which
+        # shadows the submodule of the same name on the package, so
+        # ``import neorx.genmol.generate as m`` binds the function.
+        generate_module = importlib.import_module("neorx.genmol.generate")
+
+        seen = {}
+
+        def capture(model, tokenizer, **kwargs):
+            seen["model"] = model
+            seen["tokenizer"] = tokenizer
+            seen["kwargs"] = kwargs
+            return ["CCO"]
+
+        monkeypatch.setattr(generate_module, "generate", capture)
+
+        _generate_for_target(self._target(), 10)
+
+        shipped = SmilesTokenizer.load(ASSET_DIR / TOKENIZER_NAME)
+        assert seen["tokenizer"].vocab_size == shipped.vocab_size == 34
+        assert seen["tokenizer"].token_to_idx == shipped.token_to_idx
+        # The model was built for that vocabulary, not padded to 64.
+        assert seen["model"].decoder.vocab_size == shipped.vocab_size
+        assert sum(p.numel() for p in seen["model"].parameters()) == 4_140_322
+        assert seen["kwargs"]["temperature"] == _GENERATION_TEMPERATURE
+        assert seen["kwargs"]["validate"] is True
+
+    def test_output_is_the_pretrained_models_output(self):
+        """Seeded, the result equals generating from ``load_pretrained()``.
+
+        This is the assertion the old path cannot satisfy: at seed 0 it
+        returned the ten curated scaffolds, none of which the model
+        produces.
+        """
+        import torch
+
+        from neorx.core.pipeline import _filter_novel
+        from neorx.genmol import load_pretrained
+        from neorx.genmol.generate import generate
+
+        torch.manual_seed(0)
+        actual = _generate_for_target(self._target(), 30)
+
+        # Mirror the call order exactly: ``load_pretrained()`` constructs a
+        # ``MolVAE``, whose weight initialisation draws from the same global
+        # RNG that sampling then uses.
+        torch.manual_seed(0)
+        model, tokenizer = load_pretrained()
+        expected = _filter_novel(
+            generate(
+                model,
+                tokenizer,
+                n=30,
+                temperature=_GENERATION_TEMPERATURE,
+                validate=True,
+            ),
+            max_tanimoto=0.7,
+        )
+
+        assert actual == expected
+        assert len(actual) > 0
+
+    def test_a_missing_checkpoint_raises(self, monkeypatch):
+        """``GenMolAssetError`` propagates; no curated substitute.
+
+        The old code caught it, logged a warning and returned ten
+        hard-coded molecules, which then went on to MolScreen and
+        DockBot as though they were model output.
+        """
+        import neorx.genmol as genmol_module
+        from neorx.genmol import GenMolAssetError
+
+        def boom(*args, **kwargs):
+            raise GenMolAssetError("no trained checkpoint found in /nowhere")
+
+        monkeypatch.setattr(genmol_module, "load_pretrained", boom)
+
+        with pytest.raises(GenMolAssetError, match="no trained checkpoint"):
+            _generate_for_target(self._target(), 10)
+
+    def test_no_sanitisable_molecule_raises(self, monkeypatch):
+        """An empty decode fails loudly instead of returning nothing.
+
+        Random weights decode to nothing sanitisable most of the time,
+        and the old code's ``if smiles:`` then fell through to the
+        curated list without even a warning. With the trained weights
+        the measured rate is 0.951, so an empty result means the model
+        and tokenizer disagree -- which must not surface as a COMPLETE
+        job with zero candidates.
+        """
+        import importlib
+
+        generate_module = importlib.import_module("neorx.genmol.generate")
+
+        monkeypatch.setattr(
+            generate_module, "generate", lambda *a, **k: [],
+        )
+
+        with pytest.raises(RuntimeError, match="no sanitisable molecule"):
+            _generate_for_target(self._target(), 10)
 
 
 class TestEstimateAdmet:
