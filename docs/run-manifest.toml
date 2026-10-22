@@ -21,4 +21,4 @@
 # with no record behind it, traceable only to an untracked artifact of an
 # untracked script, measured on a checkpoint the wheel does not ship.
 [readme]
-genmol_generation_quality = "2026-10-17-genmol-validity-7ea634"
+genmol_generation_quality = "2026-10-22-genmol-validity-a045aa"

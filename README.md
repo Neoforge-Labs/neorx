@@ -446,7 +446,7 @@ different size.
 Validity falls with temperature while uniqueness rises — the model has
 documented partial posterior collapse — so a rate quoted without its
 definition, temperature and sample size cannot be reproduced.  Run
-record: [`runs/2026-10-17-genmol-validity-7ea634`](runs/2026-10-17-genmol-validity-7ea634).
+record: [`runs/2026-10-22-genmol-validity-a045aa`](runs/2026-10-22-genmol-validity-a045aa).
 Reproduce with `neorx exp run genmol-validity`.
 
 Parseability and sanitisability need only the shipped weights.  Novelty
